@@ -35,7 +35,7 @@ class ThreadsPostGenerator:
         prompt = self._build_prompt(persona, news_content, num_variations)
         
         response = self.client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-3-haiku-20240307",
             max_tokens=4000,
             temperature=0.7,
             messages=[

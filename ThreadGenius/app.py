@@ -34,7 +34,6 @@ if "threads_client" not in st.session_state:
 
 # ✅ 追加：テンプレ/手動入力/ペルソナ連動用のsession_state
 if "selected_persona_name" not in st.session_state:
-    # 初期は先頭のペルソナ（あれば）
     st.session_state.selected_persona_name = st.session_state.personas[0].name if st.session_state.personas else ""
 
 if "preset_key" not in st.session_state:
@@ -42,6 +41,16 @@ if "preset_key" not in st.session_state:
 
 if "news_manual_text" not in st.session_state:
     st.session_state.news_manual_text = ""
+
+# ✅ 安全化ユーティリティ（StopIteration / 空リスト対策）
+def safe_get_persona_by_name(personas, persona_name: str):
+    """
+    persona_name が見つからない場合でも落ちないようにする。
+    """
+    if not personas:
+        return None
+    hit = next((p for p in personas if p.name == persona_name), None)
+    return hit if hit is not None else personas[0]
 
 # タイトル
 st.title("🚀 ThreadGenius")
@@ -106,16 +115,19 @@ with tab1:
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        # ✅ 置換①：ペルソナ選択（テンプレ連動のためsession_stateで管理）
+        # ✅ ペルソナ選択（テンプレ連動のためsession_stateで管理）
         persona_names = [p.name for p in st.session_state.personas]
+
+        if not persona_names:
+            st.error("ペルソナが1件もありません。タブ「ペルソナ管理」で作成してください。")
+            st.stop()
 
         # 現在選択のindexを取得（なければ0）
         try:
             persona_index = persona_names.index(st.session_state.selected_persona_name)
         except ValueError:
             persona_index = 0
-            if persona_names:
-                st.session_state.selected_persona_name = persona_names[0]
+            st.session_state.selected_persona_name = persona_names[0]
 
         selected_persona_name = st.selectbox(
             "ペルソナを選択",
@@ -126,7 +138,13 @@ with tab1:
         )
         st.session_state.selected_persona_name = selected_persona_name
 
-        selected_persona = next(p for p in st.session_state.personas if p.name == selected_persona_name)
+        # ✅ StopIterationで落ちない取得（最重要）
+        selected_persona = safe_get_persona_by_name(st.session_state.personas, selected_persona_name)
+        if selected_persona is None:
+            st.error("ペルソナが取得できませんでした。")
+            st.stop()
+        # 念のため同期
+        st.session_state.selected_persona_name = selected_persona.name
 
         # ペルソナ情報表示
         with st.expander("📋 選択中のペルソナ詳細"):
@@ -186,7 +204,7 @@ with tab1:
                     st.warning("ニュースが取得できませんでした")
 
     else:
-        # ✅ 置換②：完成版テンプレ6種＋起業家/店舗ペルソナ自動連動
+        # ✅ 完成版テンプレ6種＋起業家/店舗ペルソナ自動連動
 
         PRESET_NEWS_TEMPLATES = {
             "（選択なし）": "",
@@ -264,7 +282,6 @@ with tab1:
         }
 
         def _find_persona_by_keyword(names, keyword: str):
-            # まず「起業家」「店舗」を含むペルソナを優先
             for n in names:
                 if keyword in n:
                     return n
@@ -411,8 +428,13 @@ with tab2:
                 st.write(f"**ターゲット**: {persona.target_audience}")
                 st.write(f"**目標**: {persona.goals}")
 
-                if st.button(f"🗑️ 削除", key=f"delete_persona_{i}"):
+                if st.button("🗑️ 削除", key=f"delete_persona_{i}"):
                     st.session_state.personas.pop(i)
+                    # 削除で選択がズレる事故防止
+                    if st.session_state.personas:
+                        st.session_state.selected_persona_name = st.session_state.personas[0].name
+                    else:
+                        st.session_state.selected_persona_name = ""
                     st.rerun()
 
     with col2:
@@ -428,19 +450,28 @@ with tab2:
 
             submitted = st.form_submit_button("➕ ペルソナを追加")
 
-            if submitted and name and specialty:
-                new_persona = PersonaConfig(
-                    name=name,
-                    specialty=specialty,
-                    tone=tone,
-                    values=values,
-                    target_audience=target_audience,
-                    goals=goals
-                )
+            if submitted:
+                if not name or not specialty:
+                    st.error("❌ 名前と専門分野は必須です")
+                else:
+                    new_persona = PersonaConfig(
+                        name=name,
+                        specialty=specialty,
+                        tone=tone,
+                        values=values,
+                        target_audience=target_audience,
+                        goals=goals
+                    )
 
-                st.session_state.personas.append(new_persona)
-                st.success(f"✅ {name} を追加しました！")
-                st.rerun()
+                    st.session_state.personas.append(new_persona)
+
+                    # ✅ 追加直後に「必ず存在する選択状態」に寄せてから rerun（最重要）
+                    st.session_state.selected_persona_name = new_persona.name
+                    st.session_state.preset_key = "（選択なし）"
+                    st.session_state.news_manual_text = ""
+
+                    st.success(f"✅ {name} を追加しました！")
+                    st.rerun()
 
 # タブ3：Threads連携
 with tab3:

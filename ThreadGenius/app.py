@@ -1,545 +1,736 @@
 """
-AI投稿生成モジュール
-Claude APIを使用して、2026年最新Threadsアルゴリズムに最適化された投稿を生成
-
-高品質運用:
-- 2パス生成: Draft → Humanize（丁寧＋会話、人間味）
-- UIトグルで Calm優先（ノウハウ/数値）を切替（ui_mode_calm_priority）
-- テーマ選択で topic_tag を全投稿に強制（forced_topic_tag）
-- 人間味スコアを追加して上位表示を安定化
-- lens を付与して UI 側で検証しやすくする（app.py expander で表示）
+ThreadGenius - メインアプリケーション（Streamlit UI）
+- 投稿生成（RSS/手動 + テンプレ + Calm優先 + テーマタグ強制）
+- ペルソナ管理（CRUD）
+- Threads連携（認可URL表示→code入力→投稿）
+- 分析（プレースホルダ）
+- マイテンプレ：GitHub（user_templates.json）へ保存/削除
 """
 
-import anthropic
-from typing import List, Dict
-from config import PersonaConfig, ThreadsAlgorithmRules, PostTemplate, SCORING_WEIGHTS
+from __future__ import annotations
+
+import base64
+import json
+import os
+from datetime import datetime
+from typing import Dict, Tuple, Optional, List
+
+import requests
+import streamlit as st
+
+from config import (
+    PersonaConfig,
+    DEFAULT_PERSONAS,
+    DEFAULT_RSS_FEEDS,
+    ANTHROPIC_API_KEY,
+    THREADS_APP_ID,
+    THREADS_APP_SECRET,
+)
+from ai_generator import ThreadsPostGenerator
+from news_collector import NewsCollector
+from threads_api import ThreadsAPIClient
 
 
-class ThreadsPostGenerator:
-    """Threads投稿生成エンジン"""
+# -------------------------
+# Page
+# -------------------------
+st.set_page_config(
+    page_title="ThreadGenius - Threads投稿自動生成",
+    page_icon="🚀",
+    layout="wide",
+)
 
-    def __init__(self, api_key: str):
-        self.client = anthropic.Anthropic(api_key=api_key)
-        self.rules = ThreadsAlgorithmRules()
+st.title("🚀 ThreadGenius")
+st.caption("あなた専用 Threads 投稿自動生成ツール（投稿生成 / ペルソナ管理 / Threads連携 / 分析）")
 
-        # ===== 高品質用 =====
-        self.enable_two_pass_humanize = True
-        self.draft_temperature = 0.7
-        self.humanize_temperature = 0.4
 
-        # app.py から渡される UIトグル
-        self.ui_mode_calm_priority = False
+# -------------------------
+# GitHub Templates I/O
+# -------------------------
+def _gh_conf() -> Tuple[str, str, str, str]:
+    """
+    Streamlit Secrets から GitHub保存設定を読む。
+    Secretsが無い場合も落とさない（空文字を返す）。
+    """
+    token = st.secrets.get("GITHUB_TOKEN", "")
+    owner = st.secrets.get("GITHUB_OWNER", "")
+    repo = st.secrets.get("GITHUB_REPO", "")
+    path = st.secrets.get("GITHUB_TEMPLATES_PATH", "ThreadGenius/user_templates.json")
+    return token, owner, repo, path
 
-        # app.py から渡される テーマタグ（A＝全投稿で統一）
-        self.forced_topic_tag = None  # 例: "#Web集客"
 
-        # AIっぽさを感じやすい定型句（必要なら拡張）
-        self.ai_like_phrases = [
-            "結論から言うと", "本質的には", "重要なのは", "要するに", "つまり",
-            "〜かもしれません", "徹底的に", "最適化", "網羅的", "体系的に",
-            "ご紹介します", "解説します", "メリット・デメリット",
-        ]
+def github_get_file_json() -> Tuple[Dict[str, str], str]:
+    """
+    GitHub Contents API から JSON を取得。
+    戻り: (data_dict, sha)
+    404（未作成）は空dict扱い。
+    """
+    token, owner, repo, path = _gh_conf()
+    if not (token and owner and repo and path):
+        return {}, ""
 
-    # =========================
-    # PUBLIC
-    # =========================
-    def generate_posts(
-        self,
-        persona: PersonaConfig,
-        news_content: str,
-        num_variations: int = 5
-    ) -> List[Dict]:
-        """ペルソナとニュースから複数の投稿案を生成"""
+    url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }
 
-        # 1) Draft生成（JSON配列）
-        prompt = self._build_prompt_draft(persona, news_content, num_variations)
+    r = requests.get(url, headers=headers, timeout=15)
 
-        response = self.client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=4000,
-            temperature=self.draft_temperature,
-            messages=[{"role": "user", "content": prompt}]
+    if r.status_code == 404:
+        return {}, ""
+
+    r.raise_for_status()
+    payload = r.json()
+    sha = payload.get("sha", "") or ""
+    content_b64 = payload.get("content", "") or ""
+    try:
+        decoded = base64.b64decode(content_b64).decode("utf-8")
+        data = json.loads(decoded)
+        if isinstance(data, dict):
+            # 値は str のみ
+            data = {str(k): str(v) for k, v in data.items() if isinstance(k, (str, int)) and isinstance(v, str)}
+            return data, sha
+    except Exception:
+        pass
+
+    return {}, sha
+
+
+def github_put_file_json(data: Dict[str, str], sha: str, commit_message: str) -> None:
+    """
+    GitHub Contents API へ JSON を保存（新規/更新）。
+    """
+    token, owner, repo, path = _gh_conf()
+    if not (token and owner and repo and path):
+        raise RuntimeError("GitHub Secrets が未設定です（GITHUB_TOKEN 等）")
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }
+
+    body_text = json.dumps(data, ensure_ascii=False, indent=2)
+    content_b64 = base64.b64encode(body_text.encode("utf-8")).decode("utf-8")
+
+    payload = {"message": commit_message, "content": content_b64}
+    if sha:
+        payload["sha"] = sha
+
+    r = requests.put(url, headers=headers, json=payload, timeout=15)
+    r.raise_for_status()
+
+
+# -------------------------
+# Session State Init
+# -------------------------
+def _init_state():
+    if "personas" not in st.session_state:
+        st.session_state.personas = DEFAULT_PERSONAS.copy()
+
+    if "rss_feeds" not in st.session_state:
+        st.session_state.rss_feeds = DEFAULT_RSS_FEEDS.copy()
+
+    if "generated_posts" not in st.session_state:
+        st.session_state.generated_posts = []
+
+    if "selected_persona_name" not in st.session_state:
+        st.session_state.selected_persona_name = st.session_state.personas[0].name if st.session_state.personas else ""
+
+    if "news_manual_text" not in st.session_state:
+        st.session_state.news_manual_text = ""
+
+    if "preset_key" not in st.session_state:
+        st.session_state.preset_key = "（選択なし）"
+
+    if "generation_mode_calm" not in st.session_state:
+        st.session_state.generation_mode_calm = False
+
+    if "selected_topic_theme" not in st.session_state:
+        st.session_state.selected_topic_theme = "Web集客"
+
+    if "generation_run_id" not in st.session_state:
+        st.session_state.generation_run_id = "0"
+
+    if "threads_client" not in st.session_state:
+        st.session_state.threads_client = None
+
+    # GitHub templates cache
+    if "user_templates" not in st.session_state or "user_templates_sha" not in st.session_state:
+        data, sha = github_get_file_json()
+        st.session_state.user_templates = data
+        st.session_state.user_templates_sha = sha
+
+
+_init_state()
+
+
+# -------------------------
+# Helpers
+# -------------------------
+TOPIC_THEME_TO_TAG = {
+    "Web集客": "#Web集客",
+    "マーケティング": "#マーケティング",
+    "店舗集客": "#店舗集客",
+}
+
+
+def safe_get_persona_by_name(personas: List[PersonaConfig], persona_name: str) -> Optional[PersonaConfig]:
+    if not personas:
+        return None
+    for p in personas:
+        if p.name == persona_name:
+            return p
+    return personas[0]
+
+
+def extract_hook_body_cta(post: Dict) -> Tuple[str, str, str]:
+    hook = post.get("hook") or post.get("post_hook") or ""
+    body = post.get("body") or post.get("post_body") or ""
+    cta = post.get("cta") or post.get("call_to_action") or post.get("post_cta") or ""
+    return hook, body, cta
+
+
+# -------------------------
+# Sidebar (Settings)
+# -------------------------
+with st.sidebar:
+    st.header("⚙️ 設定")
+
+    st.subheader("🔑 APIキー")
+    anthropic_key = st.text_input(
+        "Anthropic API Key",
+        value=ANTHROPIC_API_KEY,
+        type="password",
+        help="Claude APIキー",
+    )
+    threads_app_id = st.text_input(
+        "Threads App ID",
+        value=THREADS_APP_ID,
+        help="Threads アプリID",
+    )
+    threads_app_secret = st.text_input(
+        "Threads App Secret",
+        value=THREADS_APP_SECRET,
+        type="password",
+        help="Threads アプリシークレット",
+    )
+
+    st.divider()
+
+    st.subheader("🧷 GitHub マイテンプレ保存")
+    token, owner, repo, path = _gh_conf()
+    if token and owner and repo and path:
+        st.caption(f"保存先: {owner}/{repo} → {path}")
+    else:
+        st.warning("Secrets に GITHUB_TOKEN / GITHUB_OWNER / GITHUB_REPO / GITHUB_TEMPLATES_PATH を設定してください。")
+
+    st.divider()
+
+    st.subheader("📰 RSSフィード")
+    new_feed = st.text_input("新しいRSSフィードを追加")
+    if st.button("追加", use_container_width=True) and new_feed:
+        if new_feed not in st.session_state.rss_feeds:
+            st.session_state.rss_feeds.append(new_feed)
+            st.success("追加しました")
+            st.rerun()
+
+    if st.session_state.rss_feeds:
+        st.caption("登録済み:")
+        for i, feed in enumerate(st.session_state.rss_feeds):
+            c1, c2 = st.columns([4, 1])
+            with c1:
+                st.write(feed)
+            with c2:
+                if st.button("🗑", key=f"del_feed_{i}"):
+                    st.session_state.rss_feeds.pop(i)
+                    st.rerun()
+
+# -------------------------
+# Tabs
+# -------------------------
+tab1, tab2, tab3, tab4 = st.tabs(["📝 投稿生成", "🎭 ペルソナ管理", "🔗 Threads連携", "📊 分析"])
+# =========================================================
+# Tab1: 投稿生成
+# =========================================================
+with tab1:
+    st.subheader("📝 投稿生成")
+
+    # ---- Persona select
+    persona_names = [p.name for p in st.session_state.personas]
+    if not persona_names:
+        st.error("ペルソナがありません。『ペルソナ管理』タブで作成してください。")
+        st.stop()
+
+    # 現在選択のindex
+    try:
+        persona_index = persona_names.index(st.session_state.selected_persona_name)
+    except ValueError:
+        persona_index = 0
+        st.session_state.selected_persona_name = persona_names[0]
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        selected_persona_name = st.selectbox(
+            "ペルソナを選択",
+            persona_names,
+            index=persona_index,
+            key="persona_selectbox",
+        )
+        st.session_state.selected_persona_name = selected_persona_name
+
+        selected_persona = safe_get_persona_by_name(st.session_state.personas, selected_persona_name)
+        if selected_persona is None:
+            st.error("ペルソナの取得に失敗しました。")
+            st.stop()
+
+        with st.expander("📌 選択中ペルソナ詳細"):
+            st.write(f"**専門分野**: {selected_persona.specialty}")
+            st.write(f"**口調**: {selected_persona.tone}")
+            st.write(f"**価値観**: {selected_persona.values}")
+            st.write(f"**ターゲット**: {selected_persona.target_audience}")
+            st.write(f"**目標**: {selected_persona.goals}")
+
+    with c2:
+        num_posts = st.number_input(
+            "生成する投稿数",
+            min_value=1,
+            max_value=10,
+            value=5,
+            step=1,
+            help="一度に生成する案の数",
+            key="num_posts",
         )
 
-        posts = self._parse_response(response.content[0].text, expected_count=num_variations)
+    st.divider()
 
-        # Draft段階でも念のため lens を補完（UIで N/A を減らす）
-        posts = [self._ensure_lens(p) for p in posts]
+    # ---- 共通トグル/テーマ
+    st.session_state.generation_mode_calm = st.toggle(
+        "ノウハウ/数値（Calm優先）モード",
+        value=st.session_state.generation_mode_calm,
+        help="落ち着いた丁寧な“ノウハウ/数値寄り”の生成比率を増やします",
+        key="toggle_calm_mode",
+    )
 
-        # 2) Humanize（2パス）：Warm/Calm混在（Calm優先トグル対応）
-        if self.enable_two_pass_humanize:
-            if self.ui_mode_calm_priority:
-                calm_n, warm_n = 4, 1
+    st.markdown("### 🏷️ テーマ（topic_tag を全投稿に強制適用）")
+    selected_topic_theme = st.selectbox(
+        "今回のテーマ",
+        list(TOPIC_THEME_TO_TAG.keys()),
+        index=list(TOPIC_THEME_TO_TAG.keys()).index(st.session_state.selected_topic_theme)
+        if st.session_state.selected_topic_theme in TOPIC_THEME_TO_TAG else 0,
+        key="topic_theme_select",
+    )
+    st.session_state.selected_topic_theme = selected_topic_theme
+    forced_topic_tag = TOPIC_THEME_TO_TAG.get(selected_topic_theme, "#Web集客")
+    st.caption(f"この回の投稿は **{forced_topic_tag}** を全案に適用します。")
+
+    st.divider()
+
+    # ---- ニュース入力方法
+    st.markdown("### 📰 ニュース/素材の入力")
+    news_source_type = st.radio(
+        "入力方法",
+        ["RSSフィードから自動取得", "手動で入力（テンプレあり）"],
+        horizontal=True,
+        key="news_source_type",
+    )
+
+    news_content = ""
+
+    # =========================================================
+    # RSSモード
+    # =========================================================
+    if news_source_type == "RSSフィードから自動取得":
+        col_r1, col_r2 = st.columns([1, 2])
+        with col_r1:
+            fetch = st.button("🔄 最新ニュース取得", use_container_width=True)
+        with col_r2:
+            st.caption("RSSからニュースを取得し、AIに渡す形式へ整形します。")
+
+        if fetch:
+            with st.spinner("ニュース取得中..."):
+                collector = NewsCollector(st.session_state.rss_feeds)
+                news_items = collector.collect_news(limit=8)
+
+            if not news_items:
+                st.warning("ニュースが取得できませんでした。RSS URL を見直してください。")
             else:
-                warm_n, calm_n = 3, 2
+                st.success(f"{len(news_items)}件取得しました。")
+                idx = st.selectbox(
+                    "使うニュースを選択",
+                    list(range(len(news_items))),
+                    format_func=lambda i: news_items[i].get("title", f"news_{i}"),
+                    key="selected_news_index",
+                )
+                selected_news = news_items[idx]
+                with st.expander("📄 ニュース詳細"):
+                    st.write(f"**タイトル**: {selected_news.get('title','')}")
+                    st.write(f"**概要**: {selected_news.get('summary','')}")
+                    st.write(f"**リンク**: {selected_news.get('link','')}")
+                    st.write(f"**公開日**: {selected_news.get('published','')}")
+                news_content = collector.format_for_ai(selected_news)
 
-            humanized_pool: List[Dict] = []
-            for p in posts[:num_variations]:
-                calm_post = self._humanize_post(p, persona, style_mode="polite_calm")
-                if calm_post:
-                    humanized_pool.append(calm_post)
+        # 取得済みを編集できるように（任意）
+        news_content = st.text_area(
+            "AIに渡すニュース内容（編集可）",
+            value=news_content,
+            height=180,
+            key="news_content_rss",
+        )
 
-                warm_post = self._humanize_post(p, persona, style_mode="polite_warm")
-                if warm_post:
-                    humanized_pool.append(warm_post)
+    # =========================================================
+    # 手動入力 + テンプレ（既存テンプレ + GitHubマイテンプレ）
+    # =========================================================
+    else:
+        # ---- 既存テンプレ（最低限のサンプル：必要なら後で増やせます）
+        PRESET_NEWS_TEMPLATES = {
+            "（選択なし）": "",
+            "✅ 完成版｜起業家（申込）発信量より順番": "SNSで頑張ってるのに、申込が増えない人へ。\n原因は「発信量」より、申込までの“順番”が詰まってることが多いです。\n\nあなたのボトルネックはどれ？（番号でOK）\n1 導線\n2 LP\n3 オファー\n4 信頼\n5 計測",
+            "✅ 完成版｜店舗（新規）見つけてもらえない": "新規が増えない店舗へ。\n原因は「投稿が少ない」より、見つけてもらう入口が弱いことが多いです。\n\nどこが弱い？（番号でOK）\n1 Googleマップ\n2 検索\n3 SNS\n4 写真\n5 初回不安の解消",
+        }
 
-            calm_posts = [x for x in humanized_pool if x.get("style_mode") == "polite_calm"]
-            warm_posts = [x for x in humanized_pool if x.get("style_mode") == "polite_warm"]
+        # 既存テンプレからカテゴリ→ペルソナ自動切替（簡易）
+        PRESET_TO_CATEGORY = {
+            "✅ 完成版｜起業家（申込）発信量より順番": "ビジネス",
+            "✅ 完成版｜店舗（新規）見つけてもらえない": "店舗",
+        }
 
-            posts = (calm_posts[:calm_n] + warm_posts[:warm_n])
+        def _find_persona_by_keyword(names: List[str], keyword: str) -> str:
+            for n in names:
+                if keyword in n:
+                    return n
+            return names[0] if names else ""
 
-        # 3) ★タグ統一（A）: forced_topic_tag があれば全投稿に強制適用
-        posts = self._apply_forced_topic_tag(posts)
+        # ---- 統合テンプレ（既存 + GitHubマイテンプレ）
+        user_templates = st.session_state.get("user_templates", {}) or {}
+        combined_templates: Dict[str, str] = {}
+        combined_templates.update(PRESET_NEWS_TEMPLATES)
 
-        # 4) スコアリング（既存 + 人間味）
-        scored_posts = [self._score_post(post, persona) for post in posts]
-        scored_posts.sort(key=lambda x: x.get("score", 0), reverse=True)
+        for k, v in user_templates.items():
+            combined_templates[f"🧷マイテンプレ｜{k}"] = v
 
-        return scored_posts[:num_variations]
+        preset_keys = list(combined_templates.keys())
+        preset_index = preset_keys.index(st.session_state.preset_key) if st.session_state.preset_key in preset_keys else 0
 
-    def _apply_forced_topic_tag(self, posts: List[Dict]) -> List[Dict]:
-        """A運用：テーマ選択タグを全投稿に強制"""
-        tag = (self.forced_topic_tag or "").strip()
-        if not tag:
-            return posts
+        preset_key = st.selectbox(
+            "テンプレを選択（選択すると下の本文に反映）",
+            preset_keys,
+            index=preset_index,
+            key="preset_key_select",
+        )
+        st.session_state.preset_key = preset_key
 
-        # 念のため "#" で始まっていなければ付ける
-        if not tag.startswith("#"):
-            tag = "#" + tag
+        # 選択反映
+        if preset_key != "（選択なし）":
+            st.session_state.news_manual_text = combined_templates.get(preset_key, "")
 
-        for p in posts:
-            p["topic_tag"] = tag
-        return posts
+            # 既存テンプレだけカテゴリで自動切替（マイテンプレは対象外）
+            if preset_key in PRESET_TO_CATEGORY:
+                cat = PRESET_TO_CATEGORY.get(preset_key, "")
+                if cat:
+                    target_persona = _find_persona_by_keyword(persona_names, cat)
+                    if target_persona and st.session_state.selected_persona_name != target_persona:
+                        st.session_state.selected_persona_name = target_persona
+                        st.rerun()
 
-    def _ensure_lens(self, post: Dict) -> Dict:
-        """lens が無い場合の安全なデフォルト付与（UI表示のN/A回避）"""
-        if not post.get("lens"):
-            post["lens"] = "N/A"
-        return post
+        st.session_state.news_manual_text = st.text_area(
+            "ニュース/素材（手動入力）",
+            value=st.session_state.news_manual_text,
+            height=220,
+            key="news_manual_text_area",
+        )
 
-    # =========================
-    # PROMPTS
-    # =========================
-    def _build_prompt_draft(self, persona: PersonaConfig, news_content: str, num_variations: int) -> str:
-        """1パス目：構造・論点を作る（ここでは整いすぎてもOK）"""
-        prompt = f"""
-<role>
-あなたは「2026年最新のThreadsアルゴリズム」を理解したプロのSNS投稿クリエイターです。
-</role>
+        news_content = st.session_state.news_manual_text
 
-<persona>
-名前：{persona.name}
-専門分野：{persona.specialty}
-口調：{persona.tone}
-価値観：{persona.values}
-ターゲット：{persona.target_audience}
-目標：{persona.goals}
-</persona>
+        # ---- GitHubマイテンプレ管理
+        with st.expander("🧷 マイテンプレ管理（GitHubへ保存/削除）", expanded=False):
+            token, owner, repo, path = _gh_conf()
+            if not (token and owner and repo and path):
+                st.warning("Secrets に GitHub設定が必要です（GITHUB_TOKEN 等）")
+            else:
+                st.caption(f"保存先: {owner}/{repo} → {path}")
 
-<rules>
-【2026年Threadsアルゴリズムの鉄則】
-1. 「いいね」より「リプライ（会話）」が重要
-2. テキスト中心（AIが内容を理解できる）
-3. トピックタグは1つだけ
-4. 500文字以内で「ツッコミ代」を残す（完璧すぎない）
-5. 末尾は必ず質問で終える（番号回答が理想）
-</rules>
+            tpl_name = st.text_input("テンプレ名（重複OK：上書き）", key="tpl_name_input")
+            tpl_text = st.text_area("テンプレ本文（保存する内容）", height=160, key="tpl_text_input")
 
-<structure>
-【投稿構成テンプレート】
-1. 冒頭（1-2行）：スクロールを止めるフック
-2. 本文（3-8行）：共感 or 有益情報
-3. 末尾（1-2行）：会話を誘発する質問（番号回答）
-</structure>
+            s1, s2 = st.columns([1, 1])
+            with s1:
+                if st.button("💾 保存（GitHubへ）", use_container_width=True, key="save_tpl_btn"):
+                    name = (tpl_name or "").strip()
+                    text = (tpl_text or "").strip()
+                    if not name:
+                        st.warning("テンプレ名を入力してください。")
+                    elif not text:
+                        st.warning("テンプレ本文を入力してください。")
+                    else:
+                        try:
+                            data, sha = github_get_file_json()
+                            data[name] = text
+                            github_put_file_json(data=data, sha=sha, commit_message=f"Save user template: {name}")
+                            st.session_state.user_templates = data
+                            st.session_state.user_templates_sha = sha
+                            st.success(f"保存しました: {name}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"保存に失敗しました: {e}")
 
-<context>
-【ニュース内容】
-{news_content}
-</context>
+            with s2:
+                saved_names = list((st.session_state.get("user_templates", {}) or {}).keys())
+                delete_target = st.selectbox(
+                    "削除するテンプレ",
+                    options=["（選択なし）"] + saved_names,
+                    key="delete_tpl_select",
+                )
+                if st.button("🗑 削除（GitHubへ）", use_container_width=True, key="delete_tpl_btn"):
+                    if delete_target == "（選択なし）":
+                        st.warning("削除対象を選択してください。")
+                    else:
+                        try:
+                            data, sha = github_get_file_json()
+                            if delete_target in data:
+                                data.pop(delete_target, None)
+                            github_put_file_json(data=data, sha=sha, commit_message=f"Delete user template: {delete_target}")
+                            st.session_state.user_templates = data
+                            st.session_state.user_templates_sha = sha
+                            st.success(f"削除しました: {delete_target}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"削除に失敗しました: {e}")
 
-<task>
-上記を基に、{persona.name}として{num_variations}つの投稿案を作成してください。
-</task>
+            if st.session_state.get("user_templates"):
+                st.markdown("**保存済みマイテンプレ**")
+                st.write(list(st.session_state.user_templates.keys()))
+            else:
+                st.caption("まだマイテンプレはありません。")
 
-<constraints>
-✓ 各投稿は500文字以内
-✓ {persona.tone}の口調を守る
-✓ 末尾に必ず質問（番号回答推奨）を入れる
-✓ トピックタグは1つだけ
-✓ ステージ(Stage1-4)を予測して入れる
-</constraints>
+    st.divider()
 
-<output_rules>
-【最重要：出力ルール】
-- 出力は「JSONのみ」
-- 説明文、見出し、注釈、コードフェンス（```）、箇条書き、前置きは一切禁止
-- 先頭文字は必ず '['、末尾文字は必ず ']'
-</output_rules>
+    # =========================================================
+    # 生成
+    # =========================================================
+    st.markdown("### 🚀 生成")
 
-<output_format>
-[
-  {{
-    "post_text": "投稿本文（500文字以内）",
-    "topic_tag": "#トピック名",
-    "hook": "冒頭のフック部分",
-    "body": "本文の核心部分",
-    "cta": "末尾の質問/呼びかけ",
-    "predicted_stage": "Stage1-4",
-    "conversation_trigger": "会話を誘発するポイント",
-    "reasoning": "なぜこの構成にしたか（100文字以内）",
-    "lens": "N/A"
-  }}
-]
-</output_format>
-"""
-        return prompt.strip()
+    can_generate = bool((anthropic_key or "").strip()) and bool((news_content or "").strip())
+    if not anthropic_key:
+        st.info("Anthropic API Key を入力してください。")
+    if not (news_content or "").strip():
+        st.info("ニュース/素材（RSSまたは手動入力）を入れてください。")
 
-    def _build_prompt_humanize(self, persona: PersonaConfig, draft_post: Dict, style_mode: str) -> str:
-        """2パス目：人間味（丁寧＋会話）に寄せるリライト専用プロンプト"""
-        draft_text = (draft_post.get("post_text") or "").strip()
+    if st.button("✨ 投稿を生成する", type="primary", disabled=not can_generate, use_container_width=True):
+        with st.spinner("生成中..."):
+            gen = ThreadsPostGenerator(api_key=anthropic_key)
+            gen.ui_mode_calm_priority = bool(st.session_state.generation_mode_calm)
+            gen.forced_topic_tag = forced_topic_tag
 
-        # 強制タグがあればそれを優先（Humanizeの段階でもブレ防止）
-        topic_tag = (self.forced_topic_tag or draft_post.get("topic_tag") or "#ビジネス").strip()
-        if not topic_tag.startswith("#"):
-            topic_tag = "#" + topic_tag
-
-        predicted_stage = draft_post.get("predicted_stage", "Stage2")
-        lens = draft_post.get("lens", "N/A")
-
-        if style_mode == "polite_calm":
-            mode_label = "polite_calm（丁寧で落ち着いた会話：ノウハウ/数値向き）"
-            vocab_hint = "語彙は落ち着き（ご相談でよく/現場では/ここが鍵です）。砕けすぎ禁止。"
-            warmth_hint = "硬くしすぎないために、会話のクッションを1つだけ入れる。"
-        else:
-            mode_label = "polite_warm（丁寧＋少しくだける会話：距離が近い）"
-            vocab_hint = "少しだけ近い言い回し（これ、よくあります/ここ意外と抜けます）。ただし軽すぎ禁止。"
-            warmth_hint = "丁寧語は維持しつつ、温度を少し上げる。"
-
-        prompt = f"""
-<role>
-あなたはThreadsの投稿を「プロっぽいが会話的（丁寧＋質問で巻き込む）」に整える編集者です。
-</role>
-
-<persona>
-名前：{persona.name}
-専門分野：{persona.specialty}
-口調：{persona.tone}
-価値観：{persona.values}
-ターゲット：{persona.target_audience}
-目標：{persona.goals}
-</persona>
-
-<style_mode>
-{mode_label}
-</style_mode>
-
-<input>
-以下は下書きです。内容（言いたいこと・主張・例・論点）は維持して、文の“人間味”だけを上げてください。
-下書き本文:
-{draft_text}
-</input>
-
-<human_style_spec>
-【文章品質（人間味）ルール：最重要】
-- 丁寧語（です・ます）を基本に、会話の温度感を出す（硬すぎない）
-- {vocab_hint}
-- {warmth_hint}
-- 1投稿につき「現場の一言」or「自分の小さい体験」を1つだけ入れる
-- “整いすぎ”禁止：説明し切らず、相手が返したくなる余白を残す
-- 断定しすぎず、逃げすぎない：「〜かもしれません」は最大1回まで
-- 見出し風の「Hook:」「Body:」「CTA:」などは本文に出さない
-- AIっぽい定型句は避ける（例：結論から言うと／本質的には／重要なのは／要するに）
-- 最後は必ず質問。Yes/Noで終わらせず、選択式 or 体験想起（例：どこで詰まった？どっち派？）
-- 文字数は500字以内
-- topic_tagは必ずこの1つ：{topic_tag}
-</human_style_spec>
-
-<output_rules>
-【出力ルール】
-- 出力はJSONのみ（説明文禁止）
-- 先頭は '{{'、末尾は '}}'
-</output_rules>
-
-<output_format>
-{{
-  "post_text": "改善後の投稿本文（500文字以内）",
-  "topic_tag": "{topic_tag}",
-  "hook": "本文に含まれるフックの要旨（短く）",
-  "body": "本文に含まれる核（短く）",
-  "cta": "末尾の質問文（短く）",
-  "predicted_stage": "{predicted_stage}",
-  "conversation_trigger": "返したくなる理由（短く）",
-  "reasoning": "改善の意図（100文字以内）",
-  "style_mode": "{style_mode}",
-  "lens": "{lens}"
-}}
-</output_format>
-"""
-        return prompt.strip()
-
-    # =========================
-    # HUMANIZE
-    # =========================
-    def _humanize_post(self, post: Dict, persona: PersonaConfig, style_mode: str) -> Dict:
-        """2パス目で“人間味”に寄せる。失敗時は原文を返す（style_mode付与）。"""
-        prompt = self._build_prompt_humanize(persona, post, style_mode=style_mode)
-
-        try:
-            response = self.client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=1200,
-                temperature=self.humanize_temperature,
-                messages=[{"role": "user", "content": prompt}]
+            posts = gen.generate_posts(
+                persona=selected_persona,
+                news_content=news_content,
+                num_variations=int(num_posts),
             )
-            rewritten = self._parse_single_json_object(response.content[0].text)
-            if not rewritten:
-                post["style_mode"] = style_mode
-                post = self._ensure_lens(post)
-                return post
 
-            # topic_tag は強制（A）
-            if self.forced_topic_tag:
-                rewritten["topic_tag"] = self.forced_topic_tag if self.forced_topic_tag.startswith("#") else f"#{self.forced_topic_tag}"
+            # 再生成で表示キーを変える（Streamlitの更新不具合回避）
+            st.session_state.generation_run_id = datetime.now().strftime("%Y%m%d%H%M%S")
+            st.session_state.generated_posts = posts
 
-            # lens が欠けた場合も補う
-            rewritten = self._ensure_lens(rewritten)
+        st.success("生成しました！")
 
-            # post_text が空なら戻す
-            if not (rewritten.get("post_text") or "").strip():
-                post["style_mode"] = style_mode
-                post = self._ensure_lens(post)
-                return post
+    # =========================================================
+    # 結果表示
+    # =========================================================
+    st.markdown("### 📌 生成結果")
 
-            # 500字カット（保険）
-            rewritten["post_text"] = (rewritten.get("post_text") or "")[:500]
+    posts = st.session_state.get("generated_posts", []) or []
+    if not posts:
+        st.caption("まだ生成結果はありません。")
+    else:
+        for i, post in enumerate(posts):
+            score = post.get("score", 0)
+            topic_tag = post.get("topic_tag", "")
+            style_mode = post.get("style_mode", "")
+            lens = post.get("lens", "N/A")
 
-            # 質問が無い場合は補う（保険）
-            if "？" not in rewritten["post_text"] and "?" not in rewritten["post_text"]:
-                rewritten["post_text"] = (rewritten["post_text"][:460] + "\n\nあなたはどこで詰まりましたか？")[:500]
+            hook, body, cta = extract_hook_body_cta(post)
 
-            rewritten["style_mode"] = style_mode
-            return rewritten
+            with st.container(border=True):
+                h1, h2, h3 = st.columns([2, 1, 1])
+                with h1:
+                    st.markdown(f"**#{i+1}**  スコア: **{score}**")
+                with h2:
+                    st.caption(f"tag: {topic_tag}")
+                with h3:
+                    st.caption(f"mode: {style_mode}")
 
-        except Exception:
-            post["style_mode"] = style_mode
-            post = self._ensure_lens(post)
-            return post
+                # 表示キーをrun_idで変える
+                edit_key = f"post_text_{st.session_state.generation_run_id}_{i}"
+                post_text = st.text_area(
+                    "投稿本文（編集可）",
+                    value=post.get("post_text", ""),
+                    height=160,
+                    key=edit_key,
+                )
 
-    def _parse_single_json_object(self, response_text: str) -> Dict:
-        """Humanizeの戻り（JSONオブジェクト）を抽出してdictにする"""
-        import json
-        import re
+                with st.expander("🔎 メタ情報（hook/body/cta など）"):
+                    st.write(f"**hook**: {hook}")
+                    st.write(f"**body**: {body}")
+                    st.write(f"**cta**: {cta}")
+                    st.write(f"**predicted_stage**: {post.get('predicted_stage','')}")
+                    st.write(f"**conversation_trigger**: {post.get('conversation_trigger','')}")
+                    st.write(f"**reasoning**: {post.get('reasoning','')}")
+                    st.write(f"**lens**: {lens}")
 
-        text = (response_text or "").strip()
-        m = re.search(r'\{\s*".*"\s*\}', text, re.DOTALL)
-        if not m:
-            return {}
+                # 送信ボタン（Threads連携は Tab3 でもできるが、ここからも送れるようにする）
+                if st.button("📤 この投稿をThreadsへ送る（Tab3の認証が必要）", key=f"send_post_{i}"):
+                    if not st.session_state.get("threads_client"):
+                        st.warning("Threads連携が未完了です。先に『Threads連携』タブで認証してください。")
+                    else:
+                        try:
+                            res = st.session_state.threads_client.create_post(post_text)
+                            if res and res.get("success"):
+                                st.success(f"投稿しました！ post_id={res.get('post_id')}")
+                            else:
+                                st.error("投稿に失敗しました（レスポンスが空/不正）")
+                        except Exception as e:
+                            st.error(f"投稿エラー: {e}")
+# =========================================================
+# Tab2: ペルソナ管理（CRUD）
+# =========================================================
+with tab2:
+    st.subheader("🎭 ペルソナ管理")
 
-        try:
-            obj = json.loads(m.group(0))
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            return {}
+    personas: List[PersonaConfig] = st.session_state.personas
 
-        return {}
+    st.markdown("### 登録済みペルソナ")
+    if not personas:
+        st.info("ペルソナがありません。下のフォームから追加してください。")
+    else:
+        for idx, p in enumerate(personas):
+            with st.container(border=True):
+                c1, c2 = st.columns([4, 1])
+                with c1:
+                    st.markdown(f"**{p.name}**")
+                    st.caption(f"専門: {p.specialty}")
+                    st.caption(f"口調: {p.tone}")
+                    st.caption(f"価値観: {p.values}")
+                    st.caption(f"ターゲット: {p.target_audience}")
+                    st.caption(f"目標: {p.goals}")
+                with c2:
+                    if st.button("🗑 削除", key=f"delete_persona_{idx}", use_container_width=True):
+                        # 選択中が消える場合は先頭へ退避
+                        deleting_name = p.name
+                        st.session_state.personas.pop(idx)
+                        if st.session_state.personas:
+                            if st.session_state.selected_persona_name == deleting_name:
+                                st.session_state.selected_persona_name = st.session_state.personas[0].name
+                        else:
+                            st.session_state.selected_persona_name = ""
+                        st.rerun()
 
-    # =========================
-    # PARSE（現行互換）
-    # =========================
-    def _parse_response(self, response_text: str, expected_count: int = 5) -> List[Dict]:
-        """Claude APIのレスポンスをパース（JSON優先、ダメなら分割復元）"""
-        import json
-        import re
+    st.divider()
+    st.markdown("### ➕ 新規ペルソナ追加")
 
-        text = (response_text or "").strip()
+    with st.form("add_persona_form"):
+        name = st.text_input("名前", value="")
+        specialty = st.text_input("専門分野", value="")
+        tone = st.text_input("口調", value="丁寧で親しみやすい")
+        values = st.text_area("価値観", value="")
+        target = st.text_area("ターゲット", value="")
+        goals = st.text_area("目標", value="")
 
-        first_array = re.search(r'\[\s*\{.*\}\s*\]', text, re.DOTALL)
-        if first_array:
-            try:
-                posts = json.loads(first_array.group(0))
-                if isinstance(posts, list) and posts:
-                    return posts
-            except json.JSONDecodeError:
-                pass
-
-        fenced = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
-        if fenced:
-            try:
-                posts = json.loads(fenced.group(1))
-                if isinstance(posts, list) and posts:
-                    return posts
-                if isinstance(posts, dict):
-                    return [posts]
-            except json.JSONDecodeError:
-                pass
-
-        return self._fallback_parse(text, expected_count=expected_count)
-
-    def _fallback_parse(self, text: str, expected_count: int = 5) -> List[Dict]:
-        """フォールバック：テキストから投稿を抽出して expected_count 件へ復元"""
-        import re
-
-        raw = (text or "").strip()
-        if not raw:
-            return [{
-                "post_text": "",
-                "topic_tag": self.forced_topic_tag or "#ビジネス",
-                "predicted_stage": "Stage2",
-                "conversation_trigger": "質問を含む",
-                "reasoning": "空レスポンスのためフォールバック",
-                "lens": "N/A"
-            }]
-
-        parts = re.split(r'【\s*投稿\s*\d+\s*】', raw)
-        parts = [p.strip() for p in parts if p.strip()]
-
-        if len(parts) < 2:
-            parts2 = re.split(r'投稿\s*\d+\s*[:：]?', raw)
-            parts2 = [p.strip() for p in parts2 if p.strip()]
-            if len(parts2) >= 2:
-                parts = parts2
-
-        chunks: List[str] = []
-
-        if len(parts) >= 1:
-            if len(parts) >= expected_count:
-                chunks = parts[:expected_count]
+        submitted = st.form_submit_button("追加する", use_container_width=True)
+        if submitted:
+            if not name.strip():
+                st.warning("名前は必須です。")
             else:
-                blocks = [b.strip() for b in re.split(r'\n\s*\n', raw) if b.strip()]
-                if len(blocks) >= expected_count:
-                    chunks = blocks[:expected_count]
+                new_p = PersonaConfig(
+                    name=name.strip(),
+                    specialty=(specialty or "").strip(),
+                    tone=(tone or "").strip(),
+                    values=(values or "").strip(),
+                    target_audience=(target or "").strip(),
+                    goals=(goals or "").strip(),
+                )
+                st.session_state.personas.append(new_p)
+                # 追加したら選択中にも反映
+                st.session_state.selected_persona_name = new_p.name
+                st.success("追加しました。")
+                st.rerun()
+
+
+# =========================================================
+# Tab3: Threads連携（認可URL → code入力 → token → 投稿）
+# =========================================================
+with tab3:
+    st.subheader("🔗 Threads連携")
+    st.caption("Community Cloudではブラウザ自動オープンが効きにくいので、認可URLを表示→code貼り付け方式にしています。")
+
+    # threads_api.py は OAuth URL生成/コード交換/投稿 を持つ想定
+    # 現行 threads_api.py: ThreadsAPIClient(get_authorization_url / exchange_code_for_token / create_post) [Source]
+    # [Source](https://raw.githubusercontent.com/aceept0999-star/ThreadGenius/main/ThreadGenius/threads_api.py)
+
+    if not threads_app_id or not threads_app_secret:
+        st.warning("サイドバーで Threads App ID / Secret を入力してください。")
+    else:
+        # クライアント初期化（毎回作るが、tokenは内部に保持）
+        if st.session_state.threads_client is None:
+            st.session_state.threads_client = ThreadsAPIClient(
+                app_id=threads_app_id,
+                app_secret=threads_app_secret,
+            )
+
+        client: ThreadsAPIClient = st.session_state.threads_client
+
+        st.markdown("### 1) 認可URLを開いて code を取得")
+        auth_url = client.get_authorization_url()
+        st.code(auth_url, language="text")
+        st.link_button("🔓 認可ページを開く（別タブ）", auth_url)
+
+        st.markdown("### 2) code を貼り付けてトークン取得")
+        code = st.text_input("code（URLの code= の値）", value="", key="threads_oauth_code")
+
+        if st.button("✅ code を交換してログイン", use_container_width=True, key="exchange_code_btn"):
+            if not code.strip():
+                st.warning("code を入力してください。")
+            else:
+                try:
+                    ok = client.exchange_code_for_token(code.strip())
+                    if ok:
+                        st.success("認証できました。")
+                    else:
+                        st.error("認証に失敗しました。code が正しいか確認してください。")
+                except Exception as e:
+                    st.error(f"認証エラー: {e}")
+
+        st.divider()
+        st.markdown("### 3) テスト投稿（任意）")
+
+        test_text = st.text_area(
+            "投稿テキスト（500文字以内）",
+            value="テスト投稿です。うまく送れていますか？（番号で返信してもらえると嬉しいです）\n1 はい 2 いいえ",
+            height=160,
+            key="threads_test_text",
+        )
+
+        if st.button("📤 テスト投稿を送る", use_container_width=True, key="send_test_post_btn"):
+            try:
+                res = client.create_post(test_text)
+                if res and res.get("success"):
+                    st.success(f"投稿しました！ post_id={res.get('post_id')}")
                 else:
-                    step = max(180, min(500, max(1, len(raw) // expected_count)))
-                    tmp = [raw[i:i+step].strip() for i in range(0, len(raw), step)]
-                    tmp = [t for t in tmp if t]
-                    chunks = (tmp + [""] * expected_count)[:expected_count]
+                    st.error("投稿に失敗しました（レスポンスが空/不正）")
+            except Exception as e:
+                st.error(f"投稿エラー: {e}")
 
-        posts: List[Dict] = []
-        for c in chunks[:expected_count]:
-            c2 = c.strip()
-            if c2 and ("？" not in c2 and "?" not in c2):
-                c2 = (c2[:460] + "\n\n今いちばん詰まっているのはどこですか？")[:500]
-            posts.append({
-                "post_text": c2[:500],
-                "topic_tag": self.forced_topic_tag or "#ビジネス",
-                "predicted_stage": "Stage2",
-                "conversation_trigger": "質問を含む",
-                "reasoning": "JSON取得に失敗したためテキストを分割して復元",
-                "lens": "N/A"
-            })
+        st.caption("※ 投稿に失敗する場合は、Appの権限（threads_content_publish など）と有効なアクセストークンを確認してください。")
 
-        return posts
 
-    # =========================
-    # SCORING（現行 + 人間味）
-    # =========================
-    def _score_post(self, post: Dict, persona: PersonaConfig) -> Dict:
-        """投稿をスコアリング（0-100点） + 人間味スコア"""
+# =========================================================
+# Tab4: 分析（プレースホルダ）
+# =========================================================
+with tab4:
+    st.subheader("📊 分析")
+    st.info("分析タブは現在プレースホルダです。今後、投稿の反応（views/likes/replies等）を取得して可視化します。")
 
-        score = 0
-        details = {}
-
-        conversation_score = self._evaluate_conversation_trigger(post)
-        score += conversation_score * SCORING_WEIGHTS["conversation_trigger"] * 100
-        details["conversation_trigger"] = conversation_score
-
-        trend_score = self._evaluate_trend_relevance(post)
-        score += trend_score * SCORING_WEIGHTS["trend_relevance"] * 100
-        details["trend_relevance"] = trend_score
-
-        emotional_score = self._evaluate_emotional_impact(post)
-        score += emotional_score * SCORING_WEIGHTS["emotional_impact"] * 100
-        details["emotional_impact"] = emotional_score
-
-        value_score = self._evaluate_value_provided(post)
-        score += value_score * SCORING_WEIGHTS["value_provided"] * 100
-        details["value_provided"] = value_score
-
-        stage1_score = self._evaluate_stage1_potential(post)
-        score += stage1_score * SCORING_WEIGHTS["stage1_potential"] * 100
-        details["stage1_potential"] = stage1_score
-
-        human_score = self._evaluate_human_likeness(post)
-        score += human_score * 12
-        details["human_likeness"] = human_score
-
-        post["score"] = round(score, 2)
-        post["score_details"] = details
-        return post
-
-    def _evaluate_human_likeness(self, post: Dict) -> float:
-        """人間味評価（0.0-1.0）"""
-        text = (post.get("post_text") or "")
-        cta = (post.get("cta") or "")
-
-        s = 0.0
-
-        polite = sum(1 for w in ["です", "ます", "でした", "ません"] if w in text)
-        s += min(polite * 0.12, 0.25)
-
-        if any(w in text for w in ["あなた", "みなさん", "皆さん", "でしょうか"]):
-            s += 0.18
-
-        if "？" in text or "?" in text:
-            s += 0.22
-            if any(w in text for w in ["どっち", "どちら", "何番", "どれ", "どの", "どこ"]):
-                s += 0.10
-
-        if any(w in text for w in ["正直", "ぶっちゃけ", "これ、", "これって", "よくあります", "相談で"]):
-            s += 0.18
-
-        penalty = 0.0
-        for p in self.ai_like_phrases:
-            if p in text:
-                penalty += 0.08
-        s -= min(penalty, 0.35)
-
-        if len(cta.strip()) < 6:
-            s -= 0.05
-
-        return max(0.0, min(s, 1.0))
-
-    # ---- 既存評価（現行踏襲） ----
-    def _evaluate_conversation_trigger(self, post: Dict) -> float:
-        text = post.get("post_text", "").lower()
-        cta = post.get("cta", "").lower()
-
-        score = 0.0
-        if "?" in text or "？" in text:
-            score += 0.4
-
-        opinion_keywords = ["どう思", "考え", "意見", "教えて", "どうです", "どっち", "どれ"]
-        if any(kw in text for kw in opinion_keywords):
-            score += 0.3
-
-        if len(cta) > 10:
-            score += 0.3
-
-        return min(score, 1.0)
-
-    def _evaluate_trend_relevance(self, post: Dict) -> float:
-        if post.get("topic_tag"):
-            return 0.8
-        return 0.4
-
-    def _evaluate_emotional_impact(self, post: Dict) -> float:
-        text = post.get("post_text", "")
-        emotional_words = ["驚", "感動", "最高", "やばい", "すごい", "衝撃", "共感", "涙"]
-        count = sum(1 for word in emotional_words if word in text)
-        return min(count * 0.25, 1.0)
-
-    def _evaluate_value_provided(self, post: Dict) -> float:
-        text = post.get("post_text", "")
-        value_keywords = ["方法", "コツ", "ポイント", "秘訣", "戦略", "結果", "データ", "実践", "手順"]
-        count = sum(1 for word in value_keywords if word in text)
-        return min(count * 0.3, 1.0)
-
-    def _evaluate_stage1_potential(self, post: Dict) -> float:
-        predicted_stage = post.get("predicted_stage", "Stage1")
-        if "Stage3" in predicted_stage or "Stage4" in predicted_stage:
-            return 0.9
-        elif "Stage2" in predicted_stage:
-            return 0.7
-        else:
-            return 0.5
+    st.markdown("#### 参考：threads_api.py の insights 取得")
+    st.caption("threads_api.py には get_insights が実装されています（トークン取得後に post_id を指定）。")
+    st.caption("※ 現状はUI未接続のため、必要ならこのタブに post_id 入力→get_insights の表示を追加できます。")

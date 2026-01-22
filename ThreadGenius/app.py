@@ -7,7 +7,15 @@ import streamlit as st
 import json
 import os
 from datetime import datetime, timedelta
-from config import PersonaConfig, DEFAULT_PERSONAS, DEFAULT_RSS_FEEDS, ANTHROPIC_API_KEY, THREADS_APP_ID, THREADS_APP_SECRET
+
+from config import (
+    PersonaConfig,
+    DEFAULT_PERSONAS,
+    DEFAULT_RSS_FEEDS,
+    ANTHROPIC_API_KEY,
+    THREADS_APP_ID,
+    THREADS_APP_SECRET,
+)
 from ai_generator import ThreadsPostGenerator
 from news_collector import NewsCollector
 from threads_api import ThreadsAPIClient
@@ -32,7 +40,6 @@ if "rss_feeds" not in st.session_state:
 if "threads_client" not in st.session_state:
     st.session_state.threads_client = None
 
-# ✅ 追加：テンプレ/手動入力/ペルソナ連動用のsession_state（既存）
 if "selected_persona_name" not in st.session_state:
     st.session_state.selected_persona_name = st.session_state.personas[0].name if st.session_state.personas else ""
 
@@ -42,11 +49,15 @@ if "preset_key" not in st.session_state:
 if "news_manual_text" not in st.session_state:
     st.session_state.news_manual_text = ""
 
-# ✅ 追加①：生成モード（RSS/手動 共通）Calm優先トグル（既存に合わせて維持）
+# ✅ 追加①：生成モード（RSS/手動 共通）Calm優先トグル
 if "generation_mode_calm" not in st.session_state:
     st.session_state.generation_mode_calm = False
 
-# ✅ 追加②：テーマ選択（Web集客/マーケティング/店舗集客）→ forced_topic_tag で全投稿へ強制適用
+# ✅ 追加①補助：再生成時に post_text 表示が更新されない問題対策（run_id）
+if "generation_run_id" not in st.session_state:
+    st.session_state.generation_run_id = "0"
+
+# ✅ 追加②：テーマ選択（Web集客/マーケティング/店舗集客）→ forced_topic_tag 強制適用
 if "selected_topic_theme" not in st.session_state:
     st.session_state.selected_topic_theme = "Web集客"
 
@@ -56,7 +67,7 @@ TOPIC_THEME_TO_TAG = {
     "店舗集客": "#店舗集客",
 }
 
-# ✅ 安全化ユーティリティ（StopIteration / 空リスト対策）
+# 安全化ユーティリティ（StopIteration / 空リスト対策）
 def safe_get_persona_by_name(personas, persona_name: str):
     """
     persona_name が見つからない場合でも落ちないようにする。
@@ -66,7 +77,7 @@ def safe_get_persona_by_name(personas, persona_name: str):
     hit = next((p for p in personas if p.name == persona_name), None)
     return hit if hit is not None else personas[0]
 
-# ✅ 投稿オブジェクトから hook/body/cta を推定抽出（存在すれば表示）
+
 def extract_hook_body_cta(post: dict):
     """
     generator側の返却形式が将来変わっても壊れないように、
@@ -75,9 +86,8 @@ def extract_hook_body_cta(post: dict):
     hook = post.get("hook") or post.get("post_hook") or ""
     body = post.get("body") or post.get("post_body") or ""
     cta = post.get("cta") or post.get("call_to_action") or post.get("post_cta") or ""
-
-    # もし post_text しかない場合でも、空のままにしてUIを壊さない
     return hook, body, cta
+
 
 # タイトル
 st.title("🚀 ThreadGenius")
@@ -135,6 +145,7 @@ with st.sidebar:
 # メインコンテンツ
 tab1, tab2, tab3, tab4 = st.tabs(["📝 投稿生成", "🎭 ペルソナ管理", "🔗 Threads連携", "📊 分析"])
 
+
 # タブ1：投稿生成
 with tab1:
     st.header("投稿を自動生成")
@@ -142,7 +153,7 @@ with tab1:
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        # ✅ ペルソナ選択（テンプレ連動のためsession_stateで管理）
+        # ペルソナ選択（テンプレ連動のためsession_stateで管理）
         persona_names = [p.name for p in st.session_state.personas]
 
         if not persona_names:
@@ -165,12 +176,11 @@ with tab1:
         )
         st.session_state.selected_persona_name = selected_persona_name
 
-        # ✅ StopIterationで落ちない取得（最重要）
         selected_persona = safe_get_persona_by_name(st.session_state.personas, selected_persona_name)
         if selected_persona is None:
             st.error("ペルソナが取得できませんでした。")
             st.stop()
-        # 念のため同期
+
         st.session_state.selected_persona_name = selected_persona.name
 
         # ペルソナ情報表示
@@ -234,7 +244,6 @@ with tab1:
                 if news_items:
                     st.success(f"{len(news_items)}件のニュースを取得しました！")
 
-                    # ニュース選択
                     selected_news_index = st.selectbox(
                         "投稿に使用するニュースを選択",
                         range(len(news_items)),
@@ -253,7 +262,7 @@ with tab1:
                     st.warning("ニュースが取得できませんでした")
 
     else:
-        # ✅ テンプレ選択（完成版6種 + 🧩1テーマ5役割テンプレ6種）＋起業家/店舗ペルソナ自動連動
+        # テンプレ選択（既存ロジックを維持）
         PRESET_NEWS_TEMPLATES = {
             "（選択なし）": "",
 
@@ -261,7 +270,6 @@ with tab1:
             # 🧩 1テーマ5役割テンプレ（合計6テーマ：起業家3 + 店舗3）
             # =========================================================
 
-            # --- 起業家：申込 ---
             "🧩1テーマ5役割｜起業家：申込が増えない（被り防止）": """【テーマ】SNS頑張ってるのに申込が増えない（原因は“発信量”より“順番”）
 【前提】同じテーマで“1日5投稿”作るが、文章の被りは禁止。5本は必ず別の型で。
 
@@ -288,7 +296,6 @@ with tab1:
 
 【目的】返信（会話）を増やし、コメント欄で状況を聞き出せる投稿にする。""",
 
-            # --- 起業家：成約 ---
             "🧩1テーマ5役割｜起業家：成約しない（被り防止）": """【テーマ】アクセスはあるのに成約しない（原因は“文章力”より“比較不安の未解消”）
 【前提】同じテーマで“1日5投稿”作るが、文章の被りは禁止。5本は必ず別の型で。
 
@@ -314,7 +321,6 @@ with tab1:
 
 【目的】返信（会話）を増やし、コメント欄で「どの不安が残ってるか」を引き出す投稿にする。""",
 
-            # --- 起業家：単価 ---
             "🧩1テーマ5役割｜起業家：単価が上がらない（被り防止）": """【テーマ】単価が上がらない（原因は“価値がない”ではなく“価値の伝え方/見せ方”）
 【前提】同じテーマで“1日5投稿”作るが、文章の被りは禁止。5本は必ず別の型で。
 
@@ -329,7 +335,7 @@ with tab1:
 1 差別化（誰に何が一番強い？が曖昧）
 2 実績の見せ方（数字/ビフォアフ/変化が弱い）
 3 提案内容（中身の濃さが伝わらない）
-4 限定性（誰に合わないかが言えない）
+4 限定性（誰には合わないかが言えない）
 5 導線（高単価商品への流れが無い）
 
 【厳守ルール（重複回避）】
@@ -338,9 +344,8 @@ with tab1:
 - 同じ結論の言い回し禁止／同じ比喩禁止
 - 1つのトピックタグのみ（例：#ビジネス）
 
-【目的】返信（会話）を増やし、コメント欄で“どこが弱いか”を特定する投稿にする。""",
+【目的】返信（会話）を増やし、コメント欄で「どこが弱いか」を特定する投稿にする。""",
 
-            # --- 店舗：新規 ---
             "🧩1テーマ5役割｜店舗：新規が増えない（被り防止）": """【テーマ】新規が増えない（原因は“投稿回数”より“見つけてもらう入口”）
 【前提】同じテーマで“1日5投稿”作るが、文章の被りは禁止。5本は必ず別の型で。
 
@@ -364,9 +369,8 @@ with tab1:
 - 同じ結論の言い回し禁止／同じ比喩禁止
 - 1つのトピックタグのみ（例：#店舗集客）
 
-【目的】返信（会話）を増やし、コメント欄で“入口の弱点”を特定する投稿にする。""",
+【目的】返信（会話）を増やし、コメント欄で「入口の弱点」を特定する投稿にする。""",
 
-            # --- 店舗：リピート ---
             "🧩1テーマ5役割｜店舗：リピートしない（被り防止）": """【テーマ】新規は来るのにリピートしない（原因は“満足度”より“次回設計”）
 【前提】同じテーマで“1日5投稿”作るが、文章の被りは禁止。5本は必ず別の型で。
 
@@ -390,9 +394,8 @@ with tab1:
 - 同じ結論の言い回し禁止／同じ比喩禁止
 - 1つのトピックタグのみ（例：#リピート）
 
-【目的】返信（会話）を増やし、コメント欄で“どこが弱いか”を特定する投稿にする。""",
+【目的】返信（会話）を増やし、コメント欄で「どこが弱いか」を特定する投稿にする。""",
 
-            # --- 店舗：口コミ ---
             "🧩1テーマ5役割｜店舗：口コミが増えない（被り防止）": """【テーマ】口コミが増えない（原因は“お願い不足”より“お願いのタイミングと導線”）
 【前提】同じテーマで“1日5投稿”作るが、文章の被りは禁止。5本は必ず別の型で。
 
@@ -416,7 +419,7 @@ with tab1:
 - 同じ結論の言い回し禁止／同じ比喩禁止
 - 1つのトピックタグのみ（例：#口コミ）
 
-【目的】返信（会話）を増やし、コメント欄で“どこが詰まっているか”を特定する投稿にする。""",
+【目的】返信（会話）を増やし、コメント欄で「どこが詰まっているか」を特定する投稿にする。""",
 
             # =========================================================
             # 既存：完成版6種
@@ -564,7 +567,14 @@ with tab1:
                     )
 
                     st.session_state.generated_posts = posts
+
+                    # ✅ 重要：再生成時の表示更新対策（run_id を更新）
+                    st.session_state.generation_run_id = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+
                     st.success(f"✅ {len(posts)}件の投稿を生成しました！")
+
+                    # 表示を確実に更新したい場合は有効化（必要なら）
+                    # st.rerun()
 
                 except Exception as e:
                     st.error(f"❌ エラーが発生しました: {e}")
@@ -576,6 +586,8 @@ with tab1:
         st.markdown("---")
         st.subheader("📋 生成された投稿（post_textをメイン表示）")
         st.caption("投稿本文（post_text）だけがまず見えるようにし、詳細情報は折りたたみに移動しました。")
+
+        run_id = st.session_state.get("generation_run_id", "0")
 
         for i, post in enumerate(st.session_state.generated_posts, 1):
             score = float(post.get("score", 0) or 0)
@@ -593,7 +605,7 @@ with tab1:
                 "投稿内容",
                 value=post.get("post_text", ""),
                 height=180,
-                key=f"post_text_{i}",
+                key=f"post_text_{run_id}_{i}",
                 label_visibility="collapsed",
             )
 
@@ -606,7 +618,7 @@ with tab1:
             with meta_cols[2]:
                 st.write(f"**到達予測**: {post.get('predicted_stage', 'N/A')}")
             with meta_cols[3]:
-                if st.button("📤 投稿", key=f"publish_{i}"):
+                if st.button("📤 投稿", key=f"publish_{run_id}_{i}"):
                     if st.session_state.threads_client:
                         result = st.session_state.threads_client.create_post(post.get("post_text", ""))
                         if result:
@@ -641,39 +653,25 @@ with tab1:
                 else:
                     st.info("この投稿案には hook/body/cta が個別フィールドとして返っていません（post_textのみ表示しています）。")
 
-                st.markdown("#### 💬 会話誘発")
-                st.write(post.get("conversation_trigger", "N/A"))
+                score_details = post.get("score_details", {})
+                if score_details:
+                    st.markdown("#### 📊 スコア内訳")
+                    st.json(score_details)
 
-                st.markdown("#### 📊 スコア詳細")
-                score_details = post.get("score_details", {}) or {}
-                if isinstance(score_details, dict) and score_details:
-                    cols = st.columns(3)
-                    idx = 0
-                    for k, v in score_details.items():
-                        with cols[idx % 3]:
-                            try:
-                                st.metric(label=str(k).replace("_", " ").title(), value=f"{float(v):.2f}")
-                            except Exception:
-                                st.metric(label=str(k).replace("_", " ").title(), value=str(v))
-                        idx += 1
-                else:
-                    st.write("（スコア内訳なし）")
-
-                st.markdown("---")
-                st.markdown("#### 🧠 AI の思考プロセス（reasoning）")
-                st.write(post.get("reasoning", "説明なし"))
+                reasoning = post.get("reasoning", "")
+                if reasoning:
+                    st.markdown("#### 🧠 reasoning")
+                    st.write(reasoning)
 
             st.markdown("---")
 
+
 # タブ2：ペルソナ管理
 with tab2:
-    st.header("🎭 ペルソナ管理")
+    st.header("ペルソナ管理")
 
-    col1, col2 = st.columns([1, 1])
-
-    with col1:
-        st.subheader("既存のペルソナ")
-
+    if st.session_state.personas:
+        st.subheader("登録済みペルソナ")
         for i, persona in enumerate(st.session_state.personas):
             with st.expander(f"👤 {persona.name}"):
                 st.write(f"**専門分野**: {persona.specialty}")
@@ -682,109 +680,85 @@ with tab2:
                 st.write(f"**ターゲット**: {persona.target_audience}")
                 st.write(f"**目標**: {persona.goals}")
 
-                if st.button("🗑️ 削除", key=f"delete_persona_{i}"):
-                    st.session_state.personas.pop(i)
-                    # 削除で選択がズレる事故防止
-                    if st.session_state.personas:
-                        st.session_state.selected_persona_name = st.session_state.personas[0].name
+                if st.button("削除", key=f"delete_persona_{i}"):
+                    if len(st.session_state.personas) > 1:
+                        st.session_state.personas.pop(i)
+
+                        # 選択中だった場合のケア
+                        if st.session_state.selected_persona_name == persona.name:
+                            st.session_state.selected_persona_name = st.session_state.personas[0].name
+
+                        st.success(f"{persona.name} を削除しました")
+                        st.rerun()
                     else:
-                        st.session_state.selected_persona_name = ""
-                    st.rerun()
+                        st.warning("最低1つのペルソナが必要です")
 
-    with col2:
-        st.subheader("新しいペルソナを作成")
+    st.markdown("---")
+    st.subheader("新しいペルソナを追加")
 
-        with st.form("new_persona_form"):
-            name = st.text_input("名前")
-            specialty = st.text_input("専門分野")
-            tone = st.text_area("口調")
-            values = st.text_area("価値観")
-            target_audience = st.text_input("ターゲットオーディエンス")
-            goals = st.text_area("目標")
+    with st.form("new_persona_form"):
+        name = st.text_input("名前")
+        specialty = st.text_input("専門分野")
+        tone = st.text_input("口調", value="丁寧で親しみやすい")
+        values = st.text_area("価値観", height=100)
+        target_audience = st.text_area("ターゲット", height=100)
+        goals = st.text_area("目標", height=100)
 
-            submitted = st.form_submit_button("➕ ペルソナを追加")
+        submitted = st.form_submit_button("追加")
+        if submitted:
+            if name and specialty:
+                new_persona = PersonaConfig(
+                    name=name,
+                    specialty=specialty,
+                    tone=tone,
+                    values=values,
+                    target_audience=target_audience,
+                    goals=goals
+                )
+                st.session_state.personas.append(new_persona)
+                st.success(f"{name} を追加しました")
+                st.rerun()
+            else:
+                st.error("名前と専門分野は必須です")
 
-            if submitted:
-                if not name or not specialty:
-                    st.error("❌ 名前と専門分野は必須です")
-                else:
-                    new_persona = PersonaConfig(
-                        name=name,
-                        specialty=specialty,
-                        tone=tone,
-                        values=values,
-                        target_audience=target_audience,
-                        goals=goals
-                    )
-
-                    st.session_state.personas.append(new_persona)
-
-                    # ✅ 追加直後に「必ず存在する選択状態」に寄せてから rerun（最重要）
-                    st.session_state.selected_persona_name = new_persona.name
-                    st.session_state.preset_key = "（選択なし）"
-                    st.session_state.news_manual_text = ""
-
-                    st.success(f"✅ {name} を追加しました！")
-                    st.rerun()
 
 # タブ3：Threads連携
 with tab3:
-    st.header("🔗 Threads API 連携")
+    st.header("Threads連携")
 
     if not threads_app_id or not threads_app_secret:
-        st.warning("⚠️ サイドバーでThreads App IDとApp Secretを設定してください")
+        st.warning("Threads App ID / Secret をサイドバーで設定してください。")
     else:
-        if st.session_state.threads_client is None:
-            st.session_state.threads_client = ThreadsAPIClient(
-                app_id=threads_app_id,
-                app_secret=threads_app_secret
-            )
+        st.write("Threads API連携を設定します。")
 
-        st.subheader("OAuth認証")
-
-        if st.button("🔐 認証を開始"):
-            st.session_state.threads_client.start_oauth_flow()
-            st.info("ブラウザで認証を完了してください")
-
-        st.markdown("---")
-
-        auth_code = st.text_input(
-            "認証コードを入力",
-            help="認証後にリダイレクトされたURLの 'code=' パラメータを貼り付けてください"
-        )
-
-        if st.button("✅ 認証を完了") and auth_code:
-            with st.spinner("認証中..."):
-                success = st.session_state.threads_client.exchange_code_for_token(auth_code)
-
-                if success:
-                    st.success("🎉 認証成功！投稿できるようになりました")
-                else:
-                    st.error("❌ 認証に失敗しました")
+        if st.button("🔗 Threadsクライアント初期化"):
+            try:
+                st.session_state.threads_client = ThreadsAPIClient(
+                    app_id=threads_app_id,
+                    app_secret=threads_app_secret
+                )
+                st.success("Threadsクライアントを初期化しました。")
+            except Exception as e:
+                st.error(f"初期化エラー: {e}")
 
         st.markdown("---")
-
-        # テスト投稿
         st.subheader("テスト投稿")
 
-        test_text = st.text_area(
-            "テスト投稿内容",
-            value="ThreadGeniusからのテスト投稿です！🚀",
-            height=100
-        )
+        test_text = st.text_area("テスト投稿内容", height=120, value="テスト投稿です。返信で反応ください？")
 
         if st.button("📤 テスト投稿を送信"):
-            if st.session_state.threads_client and getattr(st.session_state.threads_client, "access_token", None):
-                with st.spinner("投稿中..."):
+            if st.session_state.threads_client:
+                try:
                     result = st.session_state.threads_client.create_post(test_text)
-
                     if result:
-                        st.success("🎉 投稿成功！")
-                        st.json(result)
+                        st.success("テスト投稿しました！")
+                except Exception as e:
+                    st.error(f"投稿エラー: {e}")
             else:
-                st.warning("⚠️ 先にOAuth認証を完了してください")
+                st.warning("Threadsクライアントが未初期化です。上のボタンで初期化してください。")
 
-# タブ4：分析（開発中）
+
+# タブ4：分析
 with tab4:
-    st.header("📊 分析（開発中）")
-    st.info("このタブは今後、投稿の反応・スコア傾向・改善提案などを表示予定です。")
+    st.header("分析")
+    st.info("分析タブは開発中です。今後、投稿パフォーマンスの可視化などを追加できます。")

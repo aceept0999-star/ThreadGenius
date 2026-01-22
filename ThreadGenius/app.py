@@ -495,7 +495,7 @@ with tab1:
         st.markdown("**テンプレ本文プレビュー（編集は下の本文欄で）**")
         st.code(tpl_preview if tpl_preview else "（プレビューなし：テンプレを選択してください）")
 
-        # --- テンプレ選択（index を使わず安定させる） ---
+                # --- テンプレ選択（index を使わず安定させる） ---
         if "preset_key_select" not in st.session_state:
             st.session_state.preset_key_select = st.session_state.get("preset_key", "（選択なし）")
         if st.session_state.preset_key_select not in preset_keys:
@@ -508,7 +508,7 @@ with tab1:
         )
         st.session_state.preset_key = preset_key
 
-        # --- テンプレ本文取得 ---
+        # --- テンプレ本文プレビュー（定義→利用の順） ---
         def _get_template_text(selected_key: str) -> str:
             if selected_key == "（選択なし）":
                 return ""
@@ -522,7 +522,7 @@ with tab1:
 
         tpl_preview = _get_template_text(preset_key)
 
-        # --- プレビュー表示（widget state の影響を受けない） ---
+        # プレビュー表示（widget stateの影響を受けない）
         st.markdown("**テンプレ本文プレビュー（編集は下の本文欄で）**")
         st.code(tpl_preview if tpl_preview else "（プレビューなし：テンプレを選択してください）")
 

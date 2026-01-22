@@ -470,9 +470,22 @@ with tab1:
         st.session_state.preset_key = preset_key
 
         # テンプレ本文プレビュー
-        tpl_preview = ""
-        if preset_key != "（選択なし）":
-            tpl_preview = combined_templates.get(preset_key, "")
+        def _get_template_text(selected_key: str) -> str:
+            if selected_key == "（選択なし）":
+                return ""
+            # まずプリセットを優先
+            if selected_key in PRESET_NEWS_TEMPLATES:
+                return PRESET_NEWS_TEMPLATES.get(selected_key, "")
+            # 🧷マイテンプレ｜xxx → xxx に戻して user_templates を参照
+            prefix = "🧷マイテンプレ｜"
+            if selected_key.startswith(prefix):
+                raw_name = selected_key[len(prefix):]
+                return (user_templates.get(raw_name) or "")
+            # 最後の保険
+            return combined_templates.get(selected_key, "")
+
+        tpl_preview = _get_template_text(preset_key)
+
 
         st.text_area(
             "テンプレ本文プレビュー（編集は下の本文欄で）",

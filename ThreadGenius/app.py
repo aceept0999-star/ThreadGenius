@@ -19,7 +19,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# セッション状態の初期化
+# セッション状態の初期化（既存キーは絶対に壊さない）
 if "personas" not in st.session_state:
     st.session_state.personas = DEFAULT_PERSONAS
 
@@ -32,7 +32,7 @@ if "rss_feeds" not in st.session_state:
 if "threads_client" not in st.session_state:
     st.session_state.threads_client = None
 
-# ✅ 追加：テンプレ/手動入力/ペルソナ連動用のsession_state
+# ✅ 追加：テンプレ/手動入力/ペルソナ連動用のsession_state（既存）
 if "selected_persona_name" not in st.session_state:
     st.session_state.selected_persona_name = st.session_state.personas[0].name if st.session_state.personas else ""
 
@@ -42,9 +42,19 @@ if "preset_key" not in st.session_state:
 if "news_manual_text" not in st.session_state:
     st.session_state.news_manual_text = ""
 
-# ✅ 追加：生成モード（RSS/手動 共通）
+# ✅ 追加①：生成モード（RSS/手動 共通）Calm優先トグル（既存に合わせて維持）
 if "generation_mode_calm" not in st.session_state:
     st.session_state.generation_mode_calm = False
+
+# ✅ 追加②：テーマ選択（Web集客/マーケティング/店舗集客）→ forced_topic_tag で全投稿へ強制適用
+if "selected_topic_theme" not in st.session_state:
+    st.session_state.selected_topic_theme = "Web集客"
+
+TOPIC_THEME_TO_TAG = {
+    "Web集客": "#Web集客",
+    "マーケティング": "#マーケティング",
+    "店舗集客": "#店舗集客",
+}
 
 # ✅ 安全化ユーティリティ（StopIteration / 空リスト対策）
 def safe_get_persona_by_name(personas, persona_name: str):
@@ -191,13 +201,27 @@ with tab1:
         horizontal=True
     )
 
-    # ✅ 生成モード（RSS/手動 共通トグル）
+    # ✅ 追加①：生成モード（RSS/手動 共通トグル）
     st.session_state.generation_mode_calm = st.toggle(
         "ノウハウ/数値（Calm優先）モード",
         value=st.session_state.generation_mode_calm,
         key="generation_mode_toggle",
         help="ノウハウ・手順・実績・数値系は『丁寧で落ち着いた会話（Calm）』を優先して生成します。"
     )
+
+    # ✅ 追加②：テーマ選択（RSS/手動 共通）→ forced_topic_tag
+    st.markdown("### 🏷️ テーマ（トピックタグ）")
+    selected_topic_theme = st.selectbox(
+        "今回の投稿テーマを選択",
+        options=list(TOPIC_THEME_TO_TAG.keys()),
+        index=list(TOPIC_THEME_TO_TAG.keys()).index(st.session_state.selected_topic_theme)
+        if st.session_state.selected_topic_theme in TOPIC_THEME_TO_TAG else 0,
+        key="topic_theme_selectbox",
+        help="選択したテーマに応じて、生成された全投稿の topic_tag を同一タグに強制適用します。"
+    )
+    st.session_state.selected_topic_theme = selected_topic_theme
+    forced_topic_tag = TOPIC_THEME_TO_TAG.get(selected_topic_theme, "#Web集客")
+    st.caption(f"この回の投稿は **{selected_topic_theme} → {forced_topic_tag}** を全案へ適用します。")
 
     news_content = ""
 
@@ -527,8 +551,11 @@ with tab1:
                 try:
                     generator = ThreadsPostGenerator(anthropic_key)
 
-                    # ✅ 追加：UIトグルを生成エンジンへ反映（ノウハウ/数値＝Calm優先）
+                    # ✅ 追加①：UIトグルを生成エンジンへ反映（ノウハウ/数値＝Calm優先）
                     generator.ui_mode_calm_priority = st.session_state.generation_mode_calm
+
+                    # ✅ 追加②：テーマ選択→ forced_topic_tag を生成エンジンへ渡す（全投稿に強制）
+                    generator.forced_topic_tag = forced_topic_tag
 
                     posts = generator.generate_posts(
                         persona=selected_persona,
@@ -587,13 +614,17 @@ with tab1:
                     else:
                         st.warning("Threads連携を設定してください（タブ3）")
 
+            # ✅ 追加③：生成結果のExpanderに style_mode / lens / topic_tag を表示
             with st.expander("🔍 詳細（hook/body/cta・スコア内訳・思考プロセス）", expanded=False):
                 hook, body, cta = extract_hook_body_cta(post)
                 has_structured = any([hook, body, cta])
 
-                # 任意：どの文体モードか見えると検証が速い
-                if post.get("style_mode"):
-                    st.write(f"**文体モード**: {post.get('style_mode')}")
+                st.markdown("#### 🏷️ メタ情報（検証用）")
+                st.write(f"**topic_tag**: {post.get('topic_tag', 'N/A')}")
+                st.write(f"**style_mode**: {post.get('style_mode', 'N/A')}")
+                st.write(f"**lens**: {post.get('lens', 'N/A')}")
+
+                st.markdown("---")
 
                 if has_structured:
                     st.markdown("#### 🧩 構成（hook / body / cta）")

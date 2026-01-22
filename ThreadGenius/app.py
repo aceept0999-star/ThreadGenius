@@ -795,13 +795,21 @@ with tab1:
                                 st.error("投稿に失敗しました（レスポンスが空/不正）")
                         except Exception as e:
                             st.error(f"投稿エラー: {e}")
+                            
 # =========================================================
 # Tab2: ペルソナ管理（CRUD）※GitHub自動保存版
 # =========================================================
 with tab2:
     st.subheader("🎭 ペルソナ管理")
 
-    personas: List[PersonaConfig] = st.session_state.personas
+    st.info("DEBUG: tab2 reached")  # ←これが出るか確認
+
+    st.write("DEBUG session_state keys:", list(st.session_state.keys()))
+    st.write("DEBUG personas exists?:", "personas" in st.session_state)
+    st.write("DEBUG personas_sha exists?:", "personas_sha" in st.session_state)
+
+    personas = st.session_state.get("personas", [])
+    st.write("DEBUG personas len:", len(personas))
 
     st.markdown("### 登録済みペルソナ")
     if not personas:

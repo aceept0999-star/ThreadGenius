@@ -495,7 +495,7 @@ with tab1:
         st.markdown("**テンプレ本文プレビュー（編集は下の本文欄で）**")
         st.code(tpl_preview if tpl_preview else "（プレビューなし：テンプレを選択してください）")
 
-                # --- テンプレ選択（index を使わず安定させる） ---
+        # --- テンプレ選択（index を使わず安定させる） ---
         if "preset_key_select" not in st.session_state:
             st.session_state.preset_key_select = st.session_state.get("preset_key", "（選択なし）")
         if st.session_state.preset_key_select not in preset_keys:

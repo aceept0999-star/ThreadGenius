@@ -2,9 +2,10 @@
 AI投稿生成モジュール
 Claude APIを使用して、2026年最新Threadsアルゴリズムに最適化された投稿を生成
 
-B運用（高品質）:
+高品質運用:
 - 2パス生成: Draft → Humanize（丁寧＋会話、人間味）
-- UIトグルで Calm優先（ノウハウ/数値）を切替
+- UIトグルで Calm優先（ノウハウ/数値）を切替（ui_mode_calm_priority）
+- テーマ選択で topic_tag を全投稿に強制（forced_topic_tag）
 - 人間味スコアを追加して上位表示を安定化
 """
 
@@ -20,15 +21,16 @@ class ThreadsPostGenerator:
         self.client = anthropic.Anthropic(api_key=api_key)
         self.rules = ThreadsAlgorithmRules()
 
-        # ===== B運用：品質安定用 =====
+        # ===== 高品質用 =====
         self.enable_two_pass_humanize = True
-
-        # Draftは発散寄り、Humanizeは安定寄り
         self.draft_temperature = 0.7
         self.humanize_temperature = 0.4
 
-        # app.py から渡される UIトグル（ノウハウ/数値＝Calm優先）
+        # app.py から渡される UIトグル
         self.ui_mode_calm_priority = False
+
+        # app.py から渡される テーマタグ（A＝全投稿で統一）
+        self.forced_topic_tag = None  # 例: "#Web集客"
 
         # AIっぽさを感じやすい定型句（必要なら拡張）
         self.ai_like_phrases = [
@@ -46,9 +48,8 @@ class ThreadsPostGenerator:
         news_content: str,
         num_variations: int = 5
     ) -> List[Dict]:
-        """
-        ペルソナとニュースから複数の投稿案を生成（B運用: 2パス + Calm/Warm切替 + 人間味スコア）
-        """
+        """ペルソナとニュースから複数の投稿案を生成"""
+
         # 1) Draft生成（JSON配列）
         prompt = self._build_prompt_draft(persona, news_content, num_variations)
 
@@ -61,9 +62,8 @@ class ThreadsPostGenerator:
 
         posts = self._parse_response(response.content[0].text, expected_count=num_variations)
 
-        # 2) Humanize（2パス）：Warm/Calmを両方作って混在させ、スコアで上位採用
+        # 2) Humanize（2パス）：Warm/Calm混在（Calm優先トグル対応）
         if self.enable_two_pass_humanize:
-            # UIトグルON（ノウハウ/数値）なら Calm優先
             if self.ui_mode_calm_priority:
                 calm_n, warm_n = 4, 1
             else:
@@ -71,12 +71,10 @@ class ThreadsPostGenerator:
 
             humanized_pool: List[Dict] = []
             for p in posts[:num_variations]:
-                # Calm版
                 calm_post = self._humanize_post(p, persona, style_mode="polite_calm")
                 if calm_post:
                     humanized_pool.append(calm_post)
 
-                # Warm版
                 warm_post = self._humanize_post(p, persona, style_mode="polite_warm")
                 if warm_post:
                     humanized_pool.append(warm_post)
@@ -86,11 +84,28 @@ class ThreadsPostGenerator:
 
             posts = (calm_posts[:calm_n] + warm_posts[:warm_n])
 
-        # 3) スコアリング（既存+人間味）
+        # 3) ★タグ統一（A）: forced_topic_tag があれば全投稿に強制適用
+        posts = self._apply_forced_topic_tag(posts)
+
+        # 4) スコアリング（既存 + 人間味）
         scored_posts = [self._score_post(post, persona) for post in posts]
         scored_posts.sort(key=lambda x: x.get("score", 0), reverse=True)
 
         return scored_posts[:num_variations]
+
+    def _apply_forced_topic_tag(self, posts: List[Dict]) -> List[Dict]:
+        """A運用：テーマ選択タグを全投稿に強制"""
+        tag = (self.forced_topic_tag or "").strip()
+        if not tag:
+            return posts
+
+        # 念のため "#" で始まっていなければ付ける
+        if not tag.startswith("#"):
+            tag = "#" + tag
+
+        for p in posts:
+            p["topic_tag"] = tag
+        return posts
 
     # =========================
     # PROMPTS
@@ -171,7 +186,12 @@ class ThreadsPostGenerator:
     def _build_prompt_humanize(self, persona: PersonaConfig, draft_post: Dict, style_mode: str) -> str:
         """2パス目：人間味（丁寧＋会話）に寄せるリライト専用プロンプト"""
         draft_text = (draft_post.get("post_text") or "").strip()
-        topic_tag = (draft_post.get("topic_tag") or "").strip() or "#ビジネス"
+
+        # 強制タグがあればそれを優先（Humanizeの段階でもブレ防止）
+        topic_tag = (self.forced_topic_tag or draft_post.get("topic_tag") or "#ビジネス").strip()
+        if not topic_tag.startswith("#"):
+            topic_tag = "#" + topic_tag
+
         predicted_stage = draft_post.get("predicted_stage", "Stage2")
 
         if style_mode == "polite_calm":
@@ -219,7 +239,7 @@ class ThreadsPostGenerator:
 - AIっぽい定型句は避ける（例：結論から言うと／本質的には／重要なのは／要するに）
 - 最後は必ず質問。Yes/Noで終わらせず、選択式 or 体験想起（例：どこで詰まった？どっち派？）
 - 文字数は500字以内
-- topic_tagは維持（変更しない）
+- topic_tagは必ずこの1つ：{topic_tag}
 </human_style_spec>
 
 <output_rules>
@@ -248,7 +268,7 @@ class ThreadsPostGenerator:
     # HUMANIZE
     # =========================
     def _humanize_post(self, post: Dict, persona: PersonaConfig, style_mode: str) -> Dict:
-        """2パス目で“人間味”に寄せる。失敗時は原文を返す（style_modeは付与）。"""
+        """2パス目で“人間味”に寄せる。失敗時は原文を返す（style_mode付与）。"""
         prompt = self._build_prompt_humanize(persona, post, style_mode=style_mode)
 
         try:
@@ -263,9 +283,9 @@ class ThreadsPostGenerator:
                 post["style_mode"] = style_mode
                 return post
 
-            # topic_tagは維持（改変防止）
-            if post.get("topic_tag") and rewritten.get("topic_tag") != post.get("topic_tag"):
-                rewritten["topic_tag"] = post.get("topic_tag")
+            # topic_tag は強制（A）
+            if self.forced_topic_tag:
+                rewritten["topic_tag"] = self.forced_topic_tag if self.forced_topic_tag.startswith("#") else f"#{self.forced_topic_tag}"
 
             # post_text が空なら戻す
             if not (rewritten.get("post_text") or "").strip():
@@ -279,9 +299,7 @@ class ThreadsPostGenerator:
             if "？" not in rewritten["post_text"] and "?" not in rewritten["post_text"]:
                 rewritten["post_text"] = (rewritten["post_text"][:460] + "\n\nあなたはどこで詰まりましたか？")[:500]
 
-            # style_modeは必ず残す
             rewritten["style_mode"] = style_mode
-
             return rewritten
 
         except Exception:
@@ -347,11 +365,10 @@ class ThreadsPostGenerator:
         if not raw:
             return [{
                 "post_text": "",
-                "topic_tag": "#ビジネス",
+                "topic_tag": self.forced_topic_tag or "#ビジネス",
                 "predicted_stage": "Stage2",
                 "conversation_trigger": "質問を含む",
-                "reasoning": "空レスポンスのためフォールバック",
-                "style_mode": "N/A"
+                "reasoning": "空レスポンスのためフォールバック"
             }]
 
         parts = re.split(r'【\s*投稿\s*\d+\s*】', raw)
@@ -385,11 +402,10 @@ class ThreadsPostGenerator:
                 c2 = (c2[:460] + "\n\n今いちばん詰まっているのはどこですか？")[:500]
             posts.append({
                 "post_text": c2[:500],
-                "topic_tag": "#ビジネス",
+                "topic_tag": self.forced_topic_tag or "#ビジネス",
                 "predicted_stage": "Stage2",
                 "conversation_trigger": "質問を含む",
-                "reasoning": "JSON取得に失敗したためテキストを分割して復元",
-                "style_mode": "N/A"
+                "reasoning": "JSON取得に失敗したためテキストを分割して復元"
             })
 
         return posts
@@ -423,7 +439,6 @@ class ThreadsPostGenerator:
         score += stage1_score * SCORING_WEIGHTS["stage1_potential"] * 100
         details["stage1_potential"] = stage1_score
 
-        # 追加：人間味（最大+12点程度）
         human_score = self._evaluate_human_likeness(post)
         score += human_score * 12
         details["human_likeness"] = human_score
@@ -439,32 +454,26 @@ class ThreadsPostGenerator:
 
         s = 0.0
 
-        # 丁寧語の気配
         polite = sum(1 for w in ["です", "ます", "でした", "ません"] if w in text)
         s += min(polite * 0.12, 0.25)
 
-        # 呼びかけ
         if any(w in text for w in ["あなた", "みなさん", "皆さん", "でしょうか"]):
             s += 0.18
 
-        # 質問の質
         if "？" in text or "?" in text:
             s += 0.22
             if any(w in text for w in ["どっち", "どちら", "何番", "どれ", "どの", "どこ"]):
                 s += 0.10
 
-        # 現場っぽい主観
         if any(w in text for w in ["正直", "ぶっちゃけ", "これ、", "これって", "よくあります", "相談で"]):
             s += 0.18
 
-        # AIっぽい定型句ペナルティ
         penalty = 0.0
         for p in self.ai_like_phrases:
             if p in text:
                 penalty += 0.08
         s -= min(penalty, 0.35)
 
-        # CTAが短すぎると会話感が落ちやすい
         if len(cta.strip()) < 6:
             s -= 0.05
 

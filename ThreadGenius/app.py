@@ -42,6 +42,10 @@ if "preset_key" not in st.session_state:
 if "news_manual_text" not in st.session_state:
     st.session_state.news_manual_text = ""
 
+# ✅ 追加：生成モード（RSS/手動 共通）
+if "generation_mode_calm" not in st.session_state:
+    st.session_state.generation_mode_calm = False
+
 # ✅ 安全化ユーティリティ（StopIteration / 空リスト対策）
 def safe_get_persona_by_name(personas, persona_name: str):
     """
@@ -187,6 +191,14 @@ with tab1:
         horizontal=True
     )
 
+    # ✅ 生成モード（RSS/手動 共通トグル）
+    st.session_state.generation_mode_calm = st.toggle(
+        "ノウハウ/数値（Calm優先）モード",
+        value=st.session_state.generation_mode_calm,
+        key="generation_mode_toggle",
+        help="ノウハウ・手順・実績・数値系は『丁寧で落ち着いた会話（Calm）』を優先して生成します。"
+    )
+
     news_content = ""
 
     if news_source_type == "RSSフィードから自動取得":
@@ -218,9 +230,6 @@ with tab1:
 
     else:
         # ✅ テンプレ選択（完成版6種 + 🧩1テーマ5役割テンプレ6種）＋起業家/店舗ペルソナ自動連動
-        # ※このブロックは現行app.pyに既に入っている前提で、そのまま維持しています [Source]
-        # [Source](https://raw.githubusercontent.com/aceept0999-star/ThreadGenius/main/ThreadGenius/app.py)
-
         PRESET_NEWS_TEMPLATES = {
             "（選択なし）": "",
 
@@ -517,6 +526,10 @@ with tab1:
             with st.spinner(f"{selected_persona.name} として投稿を生成中..."):
                 try:
                     generator = ThreadsPostGenerator(anthropic_key)
+
+                    # ✅ 追加：UIトグルを生成エンジンへ反映（ノウハウ/数値＝Calm優先）
+                    generator.ui_mode_calm_priority = st.session_state.generation_mode_calm
+
                     posts = generator.generate_posts(
                         persona=selected_persona,
                         news_content=news_content,
@@ -530,21 +543,16 @@ with tab1:
                     st.error(f"❌ エラーが発生しました: {e}")
 
     # =========================================================
-    # ✅ 生成された投稿を表示（ここが今回の“JSONっぽさ”改善の本体）
-    # - post_text をメイン表示（常に見える）
-    # - hook/body/cta/score_details/reasoning は expander に移動
+    # ✅ 生成された投稿を表示（post_textをメイン表示）
     # =========================================================
     if st.session_state.generated_posts:
         st.markdown("---")
         st.subheader("📋 生成された投稿（post_textをメイン表示）")
-
-        # 見やすさ用の説明（必要なら削除OK）
         st.caption("投稿本文（post_text）だけがまず見えるようにし、詳細情報は折りたたみに移動しました。")
 
         for i, post in enumerate(st.session_state.generated_posts, 1):
             score = float(post.get("score", 0) or 0)
 
-            # スコアに応じた色
             if score >= 80:
                 badge_color = "🟢"
             elif score >= 60:
@@ -552,10 +560,8 @@ with tab1:
             else:
                 badge_color = "🔴"
 
-            # ▼ ここが「メイン表示」：expanderを開かなくても本文が見える
             st.markdown(f"### {badge_color} 投稿案 {i}（スコア: {score:.1f}点）")
 
-            # 本文（編集可能）
             st.text_area(
                 "投稿内容",
                 value=post.get("post_text", ""),
@@ -564,35 +570,30 @@ with tab1:
                 label_visibility="collapsed",
             )
 
-            # 最低限のメタ情報（本文の下に軽く）
             meta_cols = st.columns([2, 2, 2, 1])
             with meta_cols[0]:
                 topic = post.get("topic_tag", "")
-                if topic:
-                    st.write(f"**タグ**: {topic}")
-                else:
-                    st.write("**タグ**: （なし）")
+                st.write(f"**タグ**: {topic}" if topic else "**タグ**: （なし）")
             with meta_cols[1]:
                 st.write(f"**文字数**: {len(post.get('post_text', '') or '')}文字")
             with meta_cols[2]:
                 st.write(f"**到達予測**: {post.get('predicted_stage', 'N/A')}")
             with meta_cols[3]:
-                # 投稿ボタンは右端に
                 if st.button("📤 投稿", key=f"publish_{i}"):
                     if st.session_state.threads_client:
-                        result = st.session_state.threads_client.create_post(
-                            post.get("post_text", "")
-                        )
+                        result = st.session_state.threads_client.create_post(post.get("post_text", ""))
                         if result:
                             st.success("投稿しました！")
                     else:
                         st.warning("Threads連携を設定してください（タブ3）")
 
-            # ▼ 詳細を折りたたみ
             with st.expander("🔍 詳細（hook/body/cta・スコア内訳・思考プロセス）", expanded=False):
-                # hook/body/cta（もし生成側が返していれば表示）
                 hook, body, cta = extract_hook_body_cta(post)
                 has_structured = any([hook, body, cta])
+
+                # 任意：どの文体モードか見えると検証が速い
+                if post.get("style_mode"):
+                    st.write(f"**文体モード**: {post.get('style_mode')}")
 
                 if has_structured:
                     st.markdown("#### 🧩 構成（hook / body / cta）")
@@ -609,11 +610,9 @@ with tab1:
                 else:
                     st.info("この投稿案には hook/body/cta が個別フィールドとして返っていません（post_textのみ表示しています）。")
 
-                # 会話誘発
                 st.markdown("#### 💬 会話誘発")
                 st.write(post.get("conversation_trigger", "N/A"))
 
-                # スコア詳細
                 st.markdown("#### 📊 スコア詳細")
                 score_details = post.get("score_details", {}) or {}
                 if isinstance(score_details, dict) and score_details:
@@ -622,27 +621,18 @@ with tab1:
                     for k, v in score_details.items():
                         with cols[idx % 3]:
                             try:
-                                st.metric(
-                                    label=str(k).replace("_", " ").title(),
-                                    value=f"{float(v):.2f}"
-                                )
+                                st.metric(label=str(k).replace("_", " ").title(), value=f"{float(v):.2f}")
                             except Exception:
-                                st.metric(
-                                    label=str(k).replace("_", " ").title(),
-                                    value=str(v)
-                                )
+                                st.metric(label=str(k).replace("_", " ").title(), value=str(v))
                         idx += 1
                 else:
                     st.write("（スコア内訳なし）")
 
                 st.markdown("---")
-
-                # reasoning（長文・途中で途切れる可能性がある前提なので折りたたみ維持）
                 st.markdown("#### 🧠 AI の思考プロセス（reasoning）")
                 st.write(post.get("reasoning", "説明なし"))
 
             st.markdown("---")
-
 
 # タブ2：ペルソナ管理
 with tab2:

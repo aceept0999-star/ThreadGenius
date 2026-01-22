@@ -287,6 +287,13 @@ def persist_personas_to_github(commit_message: str) -> None:
     st.session_state.personas = [dict_to_persona(d) for d in personas_data]
     st.session_state.personas_sha = sha
 
+# =========================================================
+# 起動時：personas を GitHub から復元（初回のみ）
+# =========================================================
+if "personas" not in st.session_state:
+    personas_data, sha = github_get_personas_json()
+    st.session_state.personas = [dict_to_persona(d) for d in personas_data]
+    st.session_state.personas_sha = sha
 
 # -------------------------
 # Session State Init
@@ -789,7 +796,7 @@ with tab1:
                         except Exception as e:
                             st.error(f"投稿エラー: {e}")
 # =========================================================
-# Tab2: ペルソナ管理（CRUD）
+# Tab2: ペルソナ管理（CRUD）※GitHub自動保存版
 # =========================================================
 with tab2:
     st.subheader("🎭 ペルソナ管理")
@@ -822,6 +829,13 @@ with tab2:
                         else:
                             st.session_state.selected_persona_name = ""
 
+                        # ★自動保存（GitHub）
+                        try:
+                            persist_personas_to_github(commit_message=f"Delete persona: {deleting_name}")
+                            st.success("削除しました（GitHubへ自動保存済み）")
+                        except Exception as e:
+                            st.error(f"GitHub保存に失敗: {e}")
+
                         st.rerun()
 
     st.divider()
@@ -850,7 +864,14 @@ with tab2:
                 )
                 st.session_state.personas.append(new_p)
                 st.session_state.selected_persona_name = new_p.name
-                st.success("追加しました。")
+
+                # ★自動保存（GitHub）
+                try:
+                    persist_personas_to_github(commit_message=f"Add persona: {new_p.name}")
+                    st.success("追加しました（GitHubへ自動保存済み）")
+                except Exception as e:
+                    st.error(f"GitHub保存に失敗: {e}")
+
                 st.rerun()
 
 

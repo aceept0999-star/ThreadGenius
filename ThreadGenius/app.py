@@ -52,6 +52,19 @@ def safe_get_persona_by_name(personas, persona_name: str):
     hit = next((p for p in personas if p.name == persona_name), None)
     return hit if hit is not None else personas[0]
 
+# ✅ 投稿オブジェクトから hook/body/cta を推定抽出（存在すれば表示）
+def extract_hook_body_cta(post: dict):
+    """
+    generator側の返却形式が将来変わっても壊れないように、
+    可能性のあるキーを広めに拾う。
+    """
+    hook = post.get("hook") or post.get("post_hook") or ""
+    body = post.get("body") or post.get("post_body") or ""
+    cta = post.get("cta") or post.get("call_to_action") or post.get("post_cta") or ""
+
+    # もし post_text しかない場合でも、空のままにしてUIを壊さない
+    return hook, body, cta
+
 # タイトル
 st.title("🚀 ThreadGenius")
 st.subheader("あなた専用 Threads投稿自動生成ツール")
@@ -204,7 +217,9 @@ with tab1:
                     st.warning("ニュースが取得できませんでした")
 
     else:
-        # ✅ 置換②：テンプレ選択（完成版6種 + 🧩1テーマ5役割テンプレ6種）＋起業家/店舗ペルソナ自動連動
+        # ✅ テンプレ選択（完成版6種 + 🧩1テーマ5役割テンプレ6種）＋起業家/店舗ペルソナ自動連動
+        # ※このブロックは現行app.pyに既に入っている前提で、そのまま維持しています [Source]
+        # [Source](https://raw.githubusercontent.com/aceept0999-star/ThreadGenius/main/ThreadGenius/app.py)
 
         PRESET_NEWS_TEMPLATES = {
             "（選択なし）": "",
@@ -373,8 +388,6 @@ with tab1:
             # =========================================================
             # 既存：完成版6種
             # =========================================================
-
-            # --- 起業家向け：申込 / 成約 / 単価 ---
             "✅完成版｜起業家（申込）発信量より順番": """SNSで頑張ってるのに、申込が増えない人へ。
 原因は「発信量」より、申込までの順番が詰まってることが多いです。
 
@@ -405,7 +418,6 @@ with tab1:
 4 限定性（誰には合わないも言える）
 5 導線（単価の高い商品へ誘導）""",
 
-            # --- 店舗向け：新規 / リピート / 口コミ ---
             "✅完成版｜店舗（新規）見つけてもらえない": """新規が増えない店舗へ。
 原因は「投稿が少ない」より、見つけてもらう入口が弱いことが多いです。
 
@@ -517,13 +529,20 @@ with tab1:
                 except Exception as e:
                     st.error(f"❌ エラーが発生しました: {e}")
 
-    # 生成された投稿を表示
+    # =========================================================
+    # ✅ 生成された投稿を表示（ここが今回の“JSONっぽさ”改善の本体）
+    # - post_text をメイン表示（常に見える）
+    # - hook/body/cta/score_details/reasoning は expander に移動
+    # =========================================================
     if st.session_state.generated_posts:
         st.markdown("---")
-        st.subheader("📋 生成された投稿")
+        st.subheader("📋 生成された投稿（post_textをメイン表示）")
+
+        # 見やすさ用の説明（必要なら削除OK）
+        st.caption("投稿本文（post_text）だけがまず見えるようにし、詳細情報は折りたたみに移動しました。")
 
         for i, post in enumerate(st.session_state.generated_posts, 1):
-            score = post.get("score", 0)
+            score = float(post.get("score", 0) or 0)
 
             # スコアに応じた色
             if score >= 80:
@@ -533,57 +552,97 @@ with tab1:
             else:
                 badge_color = "🔴"
 
-            with st.expander(f"{badge_color} 投稿案 {i} - スコア: {score:.1f}点"):
+            # ▼ ここが「メイン表示」：expanderを開かなくても本文が見える
+            st.markdown(f"### {badge_color} 投稿案 {i}（スコア: {score:.1f}点）")
 
-                col1, col2 = st.columns([3, 1])
+            # 本文（編集可能）
+            st.text_area(
+                "投稿内容",
+                value=post.get("post_text", ""),
+                height=180,
+                key=f"post_text_{i}",
+                label_visibility="collapsed",
+            )
 
-                with col1:
-                    st.markdown("### 📝 投稿文")
-                    st.text_area(
-                        "投稿内容",
-                        value=post.get("post_text", ""),
-                        height=200,
-                        key=f"post_text_{i}",
-                        label_visibility="collapsed"
-                    )
-
-                    st.write(f"**トピックタグ**: {post.get('topic_tag', '')}")
-                    st.write(f"**文字数**: {len(post.get('post_text', ''))}文字")
-
-                with col2:
-                    st.markdown("### 📊 スコア詳細")
-
-                    score_details = post.get("score_details", {})
-
-                    for key, value in score_details.items():
-                        st.metric(
-                            label=key.replace("_", " ").title(),
-                            value=f"{value:.2f}"
+            # 最低限のメタ情報（本文の下に軽く）
+            meta_cols = st.columns([2, 2, 2, 1])
+            with meta_cols[0]:
+                topic = post.get("topic_tag", "")
+                if topic:
+                    st.write(f"**タグ**: {topic}")
+                else:
+                    st.write("**タグ**: （なし）")
+            with meta_cols[1]:
+                st.write(f"**文字数**: {len(post.get('post_text', '') or '')}文字")
+            with meta_cols[2]:
+                st.write(f"**到達予測**: {post.get('predicted_stage', 'N/A')}")
+            with meta_cols[3]:
+                # 投稿ボタンは右端に
+                if st.button("📤 投稿", key=f"publish_{i}"):
+                    if st.session_state.threads_client:
+                        result = st.session_state.threads_client.create_post(
+                            post.get("post_text", "")
                         )
+                        if result:
+                            st.success("投稿しました！")
+                    else:
+                        st.warning("Threads連携を設定してください（タブ3）")
+
+            # ▼ 詳細を折りたたみ
+            with st.expander("🔍 詳細（hook/body/cta・スコア内訳・思考プロセス）", expanded=False):
+                # hook/body/cta（もし生成側が返していれば表示）
+                hook, body, cta = extract_hook_body_cta(post)
+                has_structured = any([hook, body, cta])
+
+                if has_structured:
+                    st.markdown("#### 🧩 構成（hook / body / cta）")
+                    if hook:
+                        st.markdown("**Hook**")
+                        st.write(hook)
+                    if body:
+                        st.markdown("**Body**")
+                        st.write(body)
+                    if cta:
+                        st.markdown("**CTA**")
+                        st.write(cta)
+                    st.markdown("---")
+                else:
+                    st.info("この投稿案には hook/body/cta が個別フィールドとして返っていません（post_textのみ表示しています）。")
+
+                # 会話誘発
+                st.markdown("#### 💬 会話誘発")
+                st.write(post.get("conversation_trigger", "N/A"))
+
+                # スコア詳細
+                st.markdown("#### 📊 スコア詳細")
+                score_details = post.get("score_details", {}) or {}
+                if isinstance(score_details, dict) and score_details:
+                    cols = st.columns(3)
+                    idx = 0
+                    for k, v in score_details.items():
+                        with cols[idx % 3]:
+                            try:
+                                st.metric(
+                                    label=str(k).replace("_", " ").title(),
+                                    value=f"{float(v):.2f}"
+                                )
+                            except Exception:
+                                st.metric(
+                                    label=str(k).replace("_", " ").title(),
+                                    value=str(v)
+                                )
+                        idx += 1
+                else:
+                    st.write("（スコア内訳なし）")
 
                 st.markdown("---")
 
-                col3, col4, col5 = st.columns([2, 2, 1])
+                # reasoning（長文・途中で途切れる可能性がある前提なので折りたたみ維持）
+                st.markdown("#### 🧠 AI の思考プロセス（reasoning）")
+                st.write(post.get("reasoning", "説明なし"))
 
-                with col3:
-                    st.write(f"**到達予測**: {post.get('predicted_stage', 'N/A')}")
+            st.markdown("---")
 
-                with col4:
-                    st.write(f"**会話誘発**: {post.get('conversation_trigger', 'N/A')}")
-
-                with col5:
-                    if st.button("📤 投稿", key=f"publish_{i}"):
-                        if st.session_state.threads_client:
-                            result = st.session_state.threads_client.create_post(
-                                post.get("post_text", "")
-                            )
-                            if result:
-                                st.success("投稿しました！")
-                        else:
-                            st.warning("Threads連携を設定してください（タブ3）")
-
-                with st.expander("🧠 AI の思考プロセス"):
-                    st.write(post.get("reasoning", "説明なし"))
 
 # タブ2：ペルソナ管理
 with tab2:
@@ -694,7 +753,7 @@ with tab3:
         )
 
         if st.button("📤 テスト投稿を送信"):
-            if st.session_state.threads_client and st.session_state.threads_client.access_token:
+            if st.session_state.threads_client and getattr(st.session_state.threads_client, "access_token", None):
                 with st.spinner("投稿中..."):
                     result = st.session_state.threads_client.create_post(test_text)
 
@@ -702,37 +761,9 @@ with tab3:
                         st.success("🎉 投稿成功！")
                         st.json(result)
             else:
-                st.error("先に認証を完了してください")
+                st.warning("⚠️ 先にOAuth認証を完了してください")
 
-# タブ4：分析
+# タブ4：分析（開発中）
 with tab4:
-    st.header("📊 分析")
-
-    st.info("🚧 この機能は開発中です")
-
-    st.markdown("""
-    ### 今後実装予定の機能
-
-    - **投稿パフォーマンス分析**
-      - いいね数、リプライ数、再投稿数の追跡
-      - エンゲージメント率の計算
-
-    - **4段階ステージ到達分析**
-      - どのステージで止まったか
-      - 改善ポイントの提案
-
-    - **ペルソナ別パフォーマンス比較**
-      - どのペルソナが最も効果的か
-
-    - **投稿時間帯分析**
-      - 最適な投稿時間の提案
-    """)
-
-# フッター
-st.markdown("---")
-st.markdown("""
-<div style='text-align: center'>
-    <p>🚀 ThreadGenius - あなた専用Threads投稿自動生成ツール</p>
-    <p>2026年最新アルゴリズム対応 | Claude API Powered</p>
-</div>
-""", unsafe_allow_html=True)
+    st.header("📊 分析（開発中）")
+    st.info("このタブは今後、投稿の反応・スコア傾向・改善提案などを表示予定です。")

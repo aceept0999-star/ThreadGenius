@@ -505,28 +505,32 @@ with tab1:
         st.markdown("**テンプレ本文プレビュー（編集は下の本文欄で）**")
         st.code(tpl_preview if tpl_preview else "（プレビューなし：テンプレを選択してください）")
 
-
         if st.button("⬇️ このテンプレを本文に反映", use_container_width=True, key="apply_template_btn"):
-            st.session_state.news_manual_text = tpl_preview
+    # 本文の“変数”だけでなく、text_area の“キー”も更新する（重要）
+    st.session_state.news_manual_text = tpl_preview
+    st.session_state.news_manual_text_area = tpl_preview
 
-            # 既存テンプレだけカテゴリで自動切替（マイテンプレは対象外）
-            if preset_key in PRESET_TO_CATEGORY:
-                cat = PRESET_TO_CATEGORY.get(preset_key, "")
-                if cat:
-                    target_persona = _find_persona_by_keyword(persona_names, cat)
-                    if target_persona:
-                        st.session_state.selected_persona_name = target_persona
+    # 既存テンプレだけカテゴリで自動切替（マイテンプレは対象外）
+    if preset_key in PRESET_TO_CATEGORY:
+        cat = PRESET_TO_CATEGORY.get(preset_key, "")
+        if cat:
+            target_persona = _find_persona_by_keyword(persona_names, cat)
+            if target_persona:
+                st.session_state.selected_persona_name = target_persona
 
-            st.rerun()
+    st.rerun()
+    
+    st.text_area(
+    "ニュース/素材（手動入力）",
+    value=st.session_state.news_manual_text,
+    height=220,
+    key="news_manual_text_area",
+)
 
-        st.session_state.news_manual_text = st.text_area(
-            "ニュース/素材（手動入力）",
-            value=st.session_state.news_manual_text,
-            height=220,
-            key="news_manual_text_area",
-        )
+# 本文は常に widget 側を正とする（反映ボタンでここも書き換えるため）
+st.session_state.news_manual_text = st.session_state.news_manual_text_area
+news_content = st.session_state.news_manual_text
 
-        news_content = st.session_state.news_manual_text
 
         # ---- GitHubマイテンプレ管理
         with st.expander("🧷 マイテンプレ管理（GitHubへ保存/削除）", expanded=False):

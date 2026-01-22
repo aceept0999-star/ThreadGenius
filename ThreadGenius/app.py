@@ -469,7 +469,7 @@ with tab1:
         )
         st.session_state.preset_key = preset_key
 
-        # テンプレ本文プレビュー
+             # テンプレ本文プレビュー
         def _get_template_text(selected_key: str) -> str:
             if selected_key == "（選択なし）":
                 return ""
@@ -484,13 +484,13 @@ with tab1:
             # 最後の保険
             return combined_templates.get(selected_key, "")
 
-       tpl_preview = _get_template_text(preset_key)
+        tpl_preview = _get_template_text(preset_key)
 
-       st.caption(f"DEBUG preset_key: {repr(preset_key)}")
-       st.caption(f"DEBUG in_presets: {preset_key in PRESET_NEWS_TEMPLATES}")
-       st.caption(f"DEBUG in_combined: {preset_key in combined_templates}")
-       st.caption(f"DEBUG user_templates_count: {len(user_templates)}")
-       st.caption(f"DEBUG tpl_preview_len: {len(tpl_preview)}")
+        st.caption(f"DEBUG preset_key: {repr(preset_key)}")
+        st.caption(f"DEBUG in_presets: {preset_key in PRESET_NEWS_TEMPLATES}")
+        st.caption(f"DEBUG in_combined: {preset_key in combined_templates}")
+        st.caption(f"DEBUG user_templates_count: {len(user_templates)}")
+        st.caption(f"DEBUG tpl_preview_len: {len(tpl_preview)}")
 
         st.text_area(
             "テンプレ本文プレビュー（編集は下の本文欄で）",

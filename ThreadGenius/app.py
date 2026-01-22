@@ -801,6 +801,18 @@ with tab1:
 # =========================================================
 with tab2:
     st.subheader("🎭 ペルソナ管理")
+    st.write("DEBUG session_state keys:", list(st.session_state.keys()))
+
+st.write("DEBUG 名前:", st.session_state.get("persona_name_input"))
+st.write("DEBUG 専門分野:", st.session_state.get("persona_expertise_input"))
+st.write("DEBUG 口調:", st.session_state.get("persona_tone_input"))
+st.write("DEBUG 価値観:", st.session_state.get("persona_values_input"))
+st.write("DEBUG ターゲット:", st.session_state.get("persona_target_input"))
+st.write("DEBUG 目標:", st.session_state.get("persona_goal_input"))
+
+st.write("DEBUG personas(list) exists?:", "personas" in st.session_state)
+st.write("DEBUG personas len:", len(st.session_state.get("personas", [])))
+
 
     st.info("DEBUG: tab2 reached")  # ←これが出るか確認
 

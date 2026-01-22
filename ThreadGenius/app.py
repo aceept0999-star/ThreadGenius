@@ -169,6 +169,124 @@ def github_put_file_json(data: Dict[str, str], sha: str, commit_message: str) ->
         )
 
     r.raise_for_status()
+    
+# =========================================================
+# Personas: GitHub 永続化（list形式）
+# 保存先: ThreadGenius/personas.json
+# =========================================================
+
+def _gh_personas_conf() -> Tuple[str, str, str, str]:
+    token = (st.secrets.get("GITHUB_TOKEN", "") or "").strip()
+    owner = (st.secrets.get("GITHUB_OWNER", "") or "").strip()
+    repo  = (st.secrets.get("GITHUB_REPO", "") or "").strip()
+    path  = (st.secrets.get("GITHUB_PERSONAS_PATH", "ThreadGenius/personas.json") or "").strip()
+    return token, owner, repo, path
+
+
+def github_get_personas_json() -> Tuple[List[Dict[str, str]], str]:
+    token, owner, repo, path = _gh_personas_conf()
+    if not (token and owner and repo and path):
+        return [], ""
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+
+    r = requests.get(url, headers=headers, timeout=15)
+    if r.status_code == 404:
+        return [], ""
+    r.raise_for_status()
+
+    payload = json.loads(r.content.decode("utf-8", errors="replace"))
+    sha = payload.get("sha", "") or ""
+    content_b64 = (payload.get("content", "") or "").replace("\n", "").replace("\r", "")
+    decoded = base64.b64decode(content_b64).decode("utf-8", errors="replace")
+
+    try:
+        data = json.loads(decoded)
+    except Exception:
+        return [], sha
+
+    if not isinstance(data, list):
+        return [], sha
+
+    cleaned = []
+    for p in data:
+        if not isinstance(p, dict):
+            continue
+        cleaned.append({
+            "name": str(p.get("name", "")).strip(),
+            "expertise": str(p.get("expertise", "")).strip(),
+            "tone": str(p.get("tone", "")).strip(),
+            "values": str(p.get("values", "")).strip(),
+            "target": str(p.get("target", "")).strip(),
+            "goal": str(p.get("goal", "")).strip(),
+        })
+    cleaned = [p for p in cleaned if p["name"]]
+    return cleaned, sha
+
+
+def github_put_personas_json(personas: List[Dict[str, str]], sha: str, commit_message: str) -> None:
+    token, owner, repo, path = _gh_personas_conf()
+    if not (token and owner and repo and path):
+        raise RuntimeError("GitHub Secrets が未設定です（GITHUB_TOKEN/OWNER/REPO 等）")
+
+    # 既存の全角混入チェック関数を流用（あなたの app.py にある想定）
+    _assert_github_secrets_ascii(token, owner, repo, path)
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+
+    content_bytes = json.dumps(personas, ensure_ascii=False, indent=2).encode("utf-8")
+    content_b64 = base64.b64encode(content_bytes).decode("ascii")
+
+    body = {"message": commit_message, "content": content_b64}
+    if sha:
+        body["sha"] = sha
+
+    r = requests.put(url, headers=headers, json=body, timeout=20)
+    if r.status_code >= 400:
+        raise RuntimeError(f"GitHub保存に失敗: {r.status_code} {r.text}")
+
+
+def persona_to_dict(p: "PersonaConfig") -> Dict[str, str]:
+    # PersonaConfig のフィールド名 → JSON保存名へ変換
+    return {
+        "name": p.name,
+        "expertise": getattr(p, "specialty", "") or "",
+        "tone": p.tone or "",
+        "values": p.values or "",
+        "target": getattr(p, "target_audience", "") or "",
+        "goal": getattr(p, "goals", "") or "",
+    }
+
+
+def dict_to_persona(d: Dict[str, str]) -> "PersonaConfig":
+    # JSON保存名 → PersonaConfig のフィールド名へ変換
+    return PersonaConfig(
+        name=(d.get("name") or "").strip(),
+        specialty=(d.get("expertise") or "").strip(),
+        tone=(d.get("tone") or "").strip(),
+        values=(d.get("values") or "").strip(),
+        target_audience=(d.get("target") or "").strip(),
+        goals=(d.get("goal") or "").strip(),
+    )
+
+
+def persist_personas_to_github(commit_message: str) -> None:
+    # session_state.personas（PersonaConfigのlist）を GitHub へ保存して sha を更新する
+    payload = [persona_to_dict(p) for p in st.session_state.personas]
+
+    github_put_personas_json(
+        payload,
+        st.session_state.get("personas_sha", ""),
+        commit_message=commit_message
+    )
+
+    # sha更新のため読み直し（ここが重要）
+    personas_data, sha = github_get_personas_json()
+    st.session_state.personas = [dict_to_persona(d) for d in personas_data]
+    st.session_state.personas_sha = sha
+
 
 # -------------------------
 # Session State Init

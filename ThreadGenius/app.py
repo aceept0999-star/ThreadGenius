@@ -461,13 +461,49 @@ with tab1:
         preset_keys = list(combined_templates.keys())
         preset_index = preset_keys.index(st.session_state.preset_key) if st.session_state.preset_key in preset_keys else 0
 
-        preset_key = st.selectbox(
-            "テンプレを選択（選択すると下の本文に反映）",
+               preset_key = st.selectbox(
+            "テンプレを選択（選択後に「反映」ボタンで本文へ反映）",
             preset_keys,
             index=preset_index,
             key="preset_key_select",
         )
         st.session_state.preset_key = preset_key
+
+        # ★テンプレ本文（プレビュー）
+        tpl_preview = ""
+        if preset_key != "（選択なし）":
+            tpl_preview = combined_templates.get(preset_key, "")
+
+        st.text_area(
+            "テンプレ本文プレビュー（編集は下の本文欄で）",
+            value=tpl_preview,
+            height=140,
+            key="tpl_preview_area",
+            disabled=True,
+        )
+
+        # ★反映ボタン：ここで初めて本文に入れる（Stop&Go回避）
+        if st.button("⬇️ このテンプレを本文に反映", use_container_width=True, key="apply_template_btn"):
+            st.session_state.news_manual_text = tpl_preview
+
+            # 既存テンプレだけカテゴリで自動切替（マイテンプレは対象外）
+            if preset_key in PRESET_TO_CATEGORY:
+                cat = PRESET_TO_CATEGORY.get(preset_key, "")
+                if cat:
+                    target_persona = _find_persona_by_keyword(persona_names, cat)
+                    if target_persona:
+                        st.session_state.selected_persona_name = target_persona
+
+            st.rerun()
+
+        # ★本文（ここを編集する）
+        st.session_state.news_manual_text = st.text_area(
+            "ニュース/素材（手動入力）",
+            value=st.session_state.news_manual_text,
+            height=220,
+            key="news_manual_text_area",
+        )
+
 
         # 選択反映
         if preset_key != "（選択なし）":

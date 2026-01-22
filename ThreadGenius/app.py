@@ -469,16 +469,6 @@ with tab1:
         if st.session_state.preset_key_select not in preset_keys:
             st.session_state.preset_key_select = "（選択なし）"
 
-        preset_key = st.selectbox(
-            "テンプレを選択（選択後に「反映」ボタンで本文へ反映）",
-            preset_keys,
-            key="preset_key_select",
-        )
-
-        # 同期（ここでは index を使わない）
-        st.session_state.preset_key = preset_key
-
-
              # テンプレ本文プレビュー
         def _get_template_text(selected_key: str) -> str:
             if selected_key == "（選択なし）":

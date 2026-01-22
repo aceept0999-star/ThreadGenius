@@ -458,10 +458,10 @@ with tab1:
         for k, v in user_templates.items():
             combined_templates[f"🧷マイテンプレ｜{k}"] = v
 
-        preset_keys = list(combined_templates.keys())
+                preset_keys = list(combined_templates.keys())
         preset_index = preset_keys.index(st.session_state.preset_key) if st.session_state.preset_key in preset_keys else 0
 
-               preset_key = st.selectbox(
+        preset_key = st.selectbox(
             "テンプレを選択（選択後に「反映」ボタンで本文へ反映）",
             preset_keys,
             index=preset_index,
@@ -504,28 +504,8 @@ with tab1:
             key="news_manual_text_area",
         )
 
-
-        # 選択反映
-        if preset_key != "（選択なし）":
-            st.session_state.news_manual_text = combined_templates.get(preset_key, "")
-
-            # 既存テンプレだけカテゴリで自動切替（マイテンプレは対象外）
-            if preset_key in PRESET_TO_CATEGORY:
-                cat = PRESET_TO_CATEGORY.get(preset_key, "")
-                if cat:
-                    target_persona = _find_persona_by_keyword(persona_names, cat)
-                    if target_persona and st.session_state.selected_persona_name != target_persona:
-                        st.session_state.selected_persona_name = target_persona
-                        st.rerun()
-
-        st.session_state.news_manual_text = st.text_area(
-            "ニュース/素材（手動入力）",
-            value=st.session_state.news_manual_text,
-            height=220,
-            key="news_manual_text_area",
-        )
-
         news_content = st.session_state.news_manual_text
+
 
         # ---- GitHubマイテンプレ管理
         with st.expander("🧷 マイテンプレ管理（GitHubへ保存/削除）", expanded=False):

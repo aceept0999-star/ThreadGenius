@@ -502,13 +502,8 @@ with tab1:
         st.caption(f"DEBUG user_templates_count: {len(user_templates)}")
         st.caption(f"DEBUG tpl_preview_len: {len(tpl_preview)}")
 
-        st.text_area(
-            "テンプレ本文プレビュー（編集は下の本文欄で）",
-            value=tpl_preview,
-            height=140,
-            key="tpl_preview_area",
-            disabled=True,
-        )
+        st.markdown("**テンプレ本文プレビュー（編集は下の本文欄で）**")
+st.code(tpl_preview if tpl_preview else "（プレビューなし：テンプレを選択してください）")
 
         if st.button("⬇️ このテンプレを本文に反映", use_container_width=True, key="apply_template_btn"):
             st.session_state.news_manual_text = tpl_preview

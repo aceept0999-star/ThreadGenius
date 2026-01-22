@@ -6,6 +6,8 @@ Streamlitを使用した対話的UI
 import streamlit as st
 import json
 import os
+import base64
+import requests
 from datetime import datetime, timedelta
 
 from config import (
@@ -26,6 +28,85 @@ st.set_page_config(
     page_icon="🚀",
     layout="wide"
 )
+
+# =========================
+# ✅ GitHubにマイテンプレを保存（Streamlit Cloud向け）
+# =========================
+def _gh_conf():
+    # Secrets が無い場合は空になる（ローカル実行でも落とさない）
+    token = st.secrets.get("GITHUB_TOKEN", "")
+    owner = st.secrets.get("GITHUB_OWNER", "")
+    repo = st.secrets.get("GITHUB_REPO", "")
+    path = st.secrets.get("GITHUB_TEMPLATES_PATH", "ThreadGenius/user_templates.json")
+    return token, owner, repo, path
+
+
+def github_get_file_json() -> tuple[dict, str]:
+    """
+    GitHub上のJSONを読み込む。
+    戻り: (data_dict, sha)
+    """
+    token, owner, repo, path = _gh_conf()
+    if not (token and owner and repo and path):
+        return {}, ""
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }
+
+    r = requests.get(url, headers=headers, timeout=15)
+
+    # ファイルがまだ無い（初回）なら空で返す
+    if r.status_code == 404:
+        return {}, ""
+
+    r.raise_for_status()
+    payload = r.json()
+    sha = payload.get("sha", "")
+    content_b64 = payload.get("content", "") or ""
+    content_bytes = base64.b64decode(content_b64)
+    text = content_bytes.decode("utf-8")
+
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            data = {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
+            return data, sha
+    except Exception:
+        pass
+
+    return {}, sha
+
+
+def github_put_file_json(data: dict, sha: str, commit_message: str) -> None:
+    """
+    GitHub上のJSONを更新（新規作成/上書き）。
+    """
+    token, owner, repo, path = _gh_conf()
+    if not (token and owner and repo and path):
+        raise RuntimeError("GitHub Secrets が未設定です（GITHUB_TOKEN等）")
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }
+
+    body_text = json.dumps(data, ensure_ascii=False, indent=2)
+    content_b64 = base64.b64encode(body_text.encode("utf-8")).decode("utf-8")
+
+    payload = {
+        "message": commit_message,
+        "content": content_b64,
+    }
+    if sha:
+        payload["sha"] = sha
+
+    r = requests.put(url, headers=headers, json=payload, timeout=15)
+    r.raise_for_status()
+
 
 # セッション状態の初期化（既存キーは絶対に壊さない）
 if "personas" not in st.session_state:
@@ -66,6 +147,16 @@ TOPIC_THEME_TO_TAG = {
     "マーケティング": "#マーケティング",
     "店舗集客": "#店舗集客",
 }
+
+# ✅ 追加：GitHubからマイテンプレを読み込み（Secrets未設定でも落ちない）
+if "user_templates" not in st.session_state:
+    data, sha = github_get_file_json()
+    st.session_state.user_templates = data
+    st.session_state.user_templates_sha = sha
+
+if "user_templates_sha" not in st.session_state:
+    st.session_state.user_templates_sha = ""
+
 
 # 安全化ユーティリティ（StopIteration / 空リスト対策）
 def safe_get_persona_by_name(personas, persona_name: str):
@@ -334,7 +425,7 @@ with tab1:
 【診断軸（5択で使用）】
 1 差別化（誰に何が一番強い？が曖昧）
 2 実績の見せ方（数字/ビフォアフ/変化が弱い）
-3 提案内容（中身の濃さが伝わらない）
+3 提案内容（中身の濃さが伝わるか）
 4 限定性（誰には合わないかが言えない）
 5 導線（高単価商品への流れが無い）
 
@@ -441,8 +532,8 @@ with tab1:
 1 誰向けの明確さ
 2 証拠（実績/事例/声）
 3 提案の具体性（何がどう変わる？）
-4 価格の根拠（なぜその値段？）
-5 申込の簡単さ（迷わない導線）""",
+4 価格の根拠（なぜその値段？が不明）
+5 申込の簡単さ（導線が迷わない導線）""",
 
             "✅完成版｜起業家（単価）安売りから抜けたい": """単価が上がらない人へ。
 価値がないんじゃなくて、“価値の伝え方”が弱いだけのことが多いです。
@@ -462,7 +553,7 @@ with tab1:
 2 検索（地域×サービス名）
 3 SNS（発見される投稿）
 4 写真（雰囲気/メニュー/実績）
-5 初回の不安を消す情報（料金/流れ/時間）""",
+5 初回不安の解消（料金/流れ/時間）""",
 
             "✅完成版｜店舗（リピート）2回目につながらない": """新規は来るのにリピートしない店舗へ。
 原因は“満足度”より、次回につながる設計が無いことが多いです。
@@ -509,21 +600,32 @@ with tab1:
                     return n
             return names[0] if names else ""
 
-        preset_keys = list(PRESET_NEWS_TEMPLATES.keys())
+        # =========================
+        # ✅ 既存テンプレ + GitHubマイテンプレ を統合して表示
+        # =========================
+        user_templates = st.session_state.get("user_templates", {}) or {}
+        combined_templates = {}
+        combined_templates.update(PRESET_NEWS_TEMPLATES)
+
+        # マイテンプレは表示名を変えて衝突回避
+        for k, v in user_templates.items():
+            combined_templates[f"🧷マイテンプレ｜{k}"] = v
+
+        preset_keys = list(combined_templates.keys())
         preset_index = preset_keys.index(st.session_state.preset_key) if st.session_state.preset_key in preset_keys else 0
 
         preset_key = st.selectbox(
             "✅テンプレを選択（ニュース内容に自動挿入）",
             preset_keys,
             index=preset_index,
-            help="テンプレを選ぶとニュース内容欄に入ります。起業家/店舗ペルソナも自動で切り替わります。",
+            help="既存テンプレに加えて、GitHubに保存したマイテンプレも選べます。",
             key="preset_selectbox"
         )
         st.session_state.preset_key = preset_key
 
-        # テンプレ選択→ニュース欄へ反映 & ペルソナ自動切替
+        # テンプレ選択→ニュース欄へ反映 & （既存テンプレだけ）ペルソナ自動切替
         if preset_key != "（選択なし）":
-            st.session_state.news_manual_text = PRESET_NEWS_TEMPLATES[preset_key]
+            st.session_state.news_manual_text = combined_templates.get(preset_key, "")
 
             category = PRESET_TO_CATEGORY.get(preset_key)
             if category:
@@ -531,6 +633,71 @@ with tab1:
                 if target_persona and st.session_state.selected_persona_name != target_persona:
                     st.session_state.selected_persona_name = target_persona
                     st.rerun()
+
+        # =========================
+        # ✅ マイテンプレ管理（GitHubに保存/削除）
+        # =========================
+        with st.expander("🧷 マイテンプレ管理（GitHubに保存）", expanded=False):
+            token, owner, repo, path = _gh_conf()
+            if not (token and owner and repo and path):
+                st.warning("GitHub保存を使うには Streamlit Secrets に GITHUB_TOKEN / GITHUB_OWNER / GITHUB_REPO / GITHUB_TEMPLATES_PATH を設定してください。")
+            else:
+                st.caption(f"保存先: {owner}/{repo} → {path}")
+
+            new_tpl_name = st.text_input("テンプレ名（重複OK：上書き）", key="user_tpl_name")
+            new_tpl_text = st.text_area("テンプレ本文（この内容を保存）", height=180, key="user_tpl_text")
+
+            c1, c2 = st.columns([1, 1])
+
+            with c1:
+                if st.button("💾 保存（GitHubへ）", key="save_user_template"):
+                    name = (new_tpl_name or "").strip()
+                    text = (new_tpl_text or "").strip()
+                    if not name:
+                        st.warning("テンプレ名を入力してください。")
+                    elif not text:
+                        st.warning("テンプレ本文を入力してください。")
+                    else:
+                        try:
+                            data, sha = github_get_file_json()
+                            data[name] = text
+                            github_put_file_json(
+                                data=data,
+                                sha=sha,
+                                commit_message=f"Save user template: {name}"
+                            )
+                            st.session_state.user_templates = data
+                            st.session_state.user_templates_sha = sha
+                            st.success(f"保存しました: {name}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 保存に失敗しました: {e}")
+
+            with c2:
+                saved_names = list((st.session_state.get("user_templates", {}) or {}).keys())
+                delete_target = st.selectbox(
+                    "削除するテンプレ",
+                    options=["（選択なし）"] + saved_names,
+                    key="delete_user_template_select"
+                )
+                if st.button("🗑 削除（GitHubへ）", key="delete_user_template_btn"):
+                    if delete_target == "（選択なし）":
+                        st.warning("削除対象を選んでください。")
+                    else:
+                        try:
+                            data, sha = github_get_file_json()
+                            data.pop(delete_target, None)
+                            github_put_file_json(
+                                data=data,
+                                sha=sha,
+                                commit_message=f"Delete user template: {delete_target}"
+                            )
+                            st.session_state.user_templates = data
+                            st.session_state.user_templates_sha = sha
+                            st.success(f"削除しました: {delete_target}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 削除に失敗しました: {e}")
 
         news_content = st.text_area(
             "ニュース内容を入力",

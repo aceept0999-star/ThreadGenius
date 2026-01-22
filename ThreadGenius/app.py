@@ -157,18 +157,18 @@ def github_put_file_json(data: Dict[str, str], sha: str, commit_message: str) ->
     if sha:
         payload["sha"] = sha
 
-  r = requests.put(url, headers=headers, json=payload, timeout=15)
+    r = requests.put(url, headers=headers, json=payload, timeout=15)
 
-if r.status_code == 403:
-    raise RuntimeError(
-        "403 Forbidden（GitHub側で書き込み権限が不足している可能性）\n"
-        f"response_text: {r.text}\n"
-        f"X-Accepted-GitHub-Permissions: {r.headers.get('X-Accepted-GitHub-Permissions','')}\n"
-        f"x-ratelimit-remaining: {r.headers.get('x-ratelimit-remaining','')}\n"
-        f"x-ratelimit-reset: {r.headers.get('x-ratelimit-reset','')}"
-    )
+    if r.status_code == 403:
+        raise RuntimeError(
+            "403 Forbidden（GitHub側で書き込み権限が不足している可能性）\n"
+            f"response_text: {r.text}\n"
+            f"X-Accepted-GitHub-Permissions: {r.headers.get('X-Accepted-GitHub-Permissions','')}\n"
+            f"x-ratelimit-remaining: {r.headers.get('x-ratelimit-remaining','')}\n"
+            f"x-ratelimit-reset: {r.headers.get('x-ratelimit-reset','')}"
+        )
 
-r.raise_for_status()
+    r.raise_for_status()
 
 # -------------------------
 # Session State Init

@@ -459,43 +459,10 @@ with tab1:
             combined_templates[f"🧷マイテンプレ｜{k}"] = v
 
         preset_keys = list(combined_templates.keys())
-        preset_index = preset_keys.index(st.session_state.preset_key) if st.session_state.preset_key in preset_keys else 0
 
-        # preset_keys は既に list(combined_templates.keys()) で作ってある前提
+        # === テンプレ手動入力ブロック（ここを1箇所にまとめる） ===
 
-        # 初回だけ widget の初期値を入れる（存在しない値なら（選択なし）へ）
-        if "preset_key_select" not in st.session_state:
-            st.session_state.preset_key_select = st.session_state.get("preset_key", "（選択なし）")
-        if st.session_state.preset_key_select not in preset_keys:
-            st.session_state.preset_key_select = "（選択なし）"
-
-             # テンプレ本文プレビュー
-        def _get_template_text(selected_key: str) -> str:
-            if selected_key == "（選択なし）":
-                return ""
-            # まずプリセットを優先
-            if selected_key in PRESET_NEWS_TEMPLATES:
-                return PRESET_NEWS_TEMPLATES.get(selected_key, "")
-            # 🧷マイテンプレ｜xxx → xxx に戻して user_templates を参照
-            prefix = "🧷マイテンプレ｜"
-            if selected_key.startswith(prefix):
-                raw_name = selected_key[len(prefix):]
-                return (user_templates.get(raw_name) or "")
-            # 最後の保険
-            return combined_templates.get(selected_key, "")
-
-        tpl_preview = _get_template_text(preset_key)
-
-        st.caption(f"DEBUG preset_key: {repr(preset_key)}")
-        st.caption(f"DEBUG in_presets: {preset_key in PRESET_NEWS_TEMPLATES}")
-        st.caption(f"DEBUG in_combined: {preset_key in combined_templates}")
-        st.caption(f"DEBUG user_templates_count: {len(user_templates)}")
-        st.caption(f"DEBUG tpl_preview_len: {len(tpl_preview)}")
-
-        st.markdown("**テンプレ本文プレビュー（編集は下の本文欄で）**")
-        st.code(tpl_preview if tpl_preview else "（プレビューなし：テンプレを選択してください）")
-
-        # --- テンプレ選択（index を使わず安定させる） ---
+        # 1) テンプレ選択（indexを使わず安定）
         if "preset_key_select" not in st.session_state:
             st.session_state.preset_key_select = st.session_state.get("preset_key", "（選択なし）")
         if st.session_state.preset_key_select not in preset_keys:
@@ -508,7 +475,7 @@ with tab1:
         )
         st.session_state.preset_key = preset_key
 
-        # --- テンプレ本文プレビュー（定義→利用の順） ---
+        # 2) テンプレ本文取得（selectboxの後）
         def _get_template_text(selected_key: str) -> str:
             if selected_key == "（選択なし）":
                 return ""
@@ -522,11 +489,11 @@ with tab1:
 
         tpl_preview = _get_template_text(preset_key)
 
-        # プレビュー表示（widget stateの影響を受けない）
+        # 3) プレビュー表示（確実に出る）
         st.markdown("**テンプレ本文プレビュー（編集は下の本文欄で）**")
         st.code(tpl_preview if tpl_preview else "（プレビューなし：テンプレを選択してください）")
 
-        # --- 反映ボタン（本文欄のキーも更新するのが重要） ---
+        # 4) 反映ボタン（本文欄キーも更新）
         if st.button("⬇️ このテンプレを本文に反映", use_container_width=True, key="apply_template_btn"):
             st.session_state.news_manual_text = tpl_preview
             st.session_state.news_manual_text_area = tpl_preview
@@ -541,7 +508,7 @@ with tab1:
 
             st.rerun()
 
-        # --- 本文欄（ここは常に1回だけ表示する） ---
+        # 5) 本文欄（ここは1回だけ）
         st.text_area(
             "ニュース/素材（手動入力）",
             value=st.session_state.get("news_manual_text_area", st.session_state.get("news_manual_text", "")),
@@ -549,7 +516,7 @@ with tab1:
             key="news_manual_text_area",
         )
 
-        # 本文は widget 側を正として同期
+        # 6) 本文は widget 側を正として同期
         st.session_state.news_manual_text = st.session_state.news_manual_text_area
         news_content = st.session_state.news_manual_text
 

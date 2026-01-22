@@ -469,15 +469,7 @@ with tab1:
         )
         st.session_state.preset_key = preset_key
 
-        preset_key = st.selectbox(
-            "テンプレを選択（選択後に「反映」ボタンで本文へ反映）",
-            preset_keys,
-            index=preset_index,
-            key="preset_key_select",
-        )
-        st.session_state.preset_key = preset_key
-
-        # ★テンプレ本文（プレビュー）
+        # テンプレ本文プレビュー
         tpl_preview = ""
         if preset_key != "（選択なし）":
             tpl_preview = combined_templates.get(preset_key, "")
@@ -490,7 +482,6 @@ with tab1:
             disabled=True,
         )
 
-        # ★反映ボタン：ここで初めて本文に入れる（Stop&Go回避）
         if st.button("⬇️ このテンプレを本文に反映", use_container_width=True, key="apply_template_btn"):
             st.session_state.news_manual_text = tpl_preview
 
@@ -504,7 +495,6 @@ with tab1:
 
             st.rerun()
 
-        # ★本文（ここを編集する）
         st.session_state.news_manual_text = st.text_area(
             "ニュース/素材（手動入力）",
             value=st.session_state.news_manual_text,
@@ -513,7 +503,6 @@ with tab1:
         )
 
         news_content = st.session_state.news_manual_text
-
 
         # ---- GitHubマイテンプレ管理
         with st.expander("🧷 マイテンプレ管理（GitHubへ保存/削除）", expanded=False):

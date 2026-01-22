@@ -290,9 +290,54 @@ def persist_personas_to_github(commit_message: str) -> None:
 # -------------------------
 # Session State Init
 # -------------------------
-def _init_state():
-    if "personas" not in st.session_state:
-        st.session_state.personas = DEFAULT_PERSONAS.copy()
+    def _init_state():
+    # =========================================================
+    # Personas init（GitHub優先 → なければDEFAULT）
+    # =========================================================
+    if "personas" not in st.session_state or "personas_sha" not in st.session_state:
+        personas_data, sha = github_get_personas_json()
+
+        if personas_data:  # GitHubに1件でもあればそれを採用
+            st.session_state.personas = [dict_to_persona(d) for d in personas_data]
+            st.session_state.personas_sha = sha
+        else:
+            # GitHub未設定/未作成/空ならデフォルト
+            st.session_state.personas = DEFAULT_PERSONAS.copy()
+            st.session_state.personas_sha = ""
+
+    # 以降は既存の初期化を維持
+    if "rss_feeds" not in st.session_state:
+        st.session_state.rss_feeds = DEFAULT_RSS_FEEDS.copy()
+
+    if "generated_posts" not in st.session_state:
+        st.session_state.generated_posts = []
+
+    if "selected_persona_name" not in st.session_state:
+        st.session_state.selected_persona_name = st.session_state.personas[0].name if st.session_state.personas else ""
+
+    if "news_manual_text" not in st.session_state:
+        st.session_state.news_manual_text = ""
+
+    if "preset_key" not in st.session_state:
+        st.session_state.preset_key = "（選択なし）"
+
+    if "generation_mode_calm" not in st.session_state:
+        st.session_state.generation_mode_calm = False
+
+    if "selected_topic_theme" not in st.session_state:
+        st.session_state.selected_topic_theme = "Web集客"
+
+    if "generation_run_id" not in st.session_state:
+        st.session_state.generation_run_id = "0"
+
+    if "threads_client" not in st.session_state:
+        st.session_state.threads_client = None
+
+    # GitHub templates cache
+    if "user_templates" not in st.session_state or "user_templates_sha" not in st.session_state:
+        data, sha = github_get_file_json()
+        st.session_state.user_templates = data
+        st.session_state.user_templates_sha = sha
 
     if "rss_feeds" not in st.session_state:
         st.session_state.rss_feeds = DEFAULT_RSS_FEEDS.copy()

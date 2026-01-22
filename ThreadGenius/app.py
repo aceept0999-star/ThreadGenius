@@ -64,6 +64,7 @@ def github_get_file_json() -> Tuple[Dict[str, str], str]:
     GitHub Contents API から JSON を取得。
     戻り: (data_dict, sha)
     404（未作成）は空dict扱い。
+    取得/デコードに失敗してもアプリを落とさない（空dictで継続）。
     """
     token, owner, repo, path = _gh_conf()
     if not (token and owner and repo and path):
@@ -75,26 +76,43 @@ def github_get_file_json() -> Tuple[Dict[str, str], str]:
         "Accept": "application/vnd.github+json",
     }
 
-    r = requests.get(url, headers=headers, timeout=15)
-
-    if r.status_code == 404:
-        return {}, ""
-
-    r.raise_for_status()
-    payload = r.json()
-    sha = payload.get("sha", "") or ""
-    content_b64 = payload.get("content", "") or ""
     try:
-        decoded = base64.b64decode(content_b64).decode("utf-8")
-        data = json.loads(decoded)
-        if isinstance(data, dict):
-            # 値は str のみ
-            data = {str(k): str(v) for k, v in data.items() if isinstance(k, (str, int)) and isinstance(v, str)}
-            return data, sha
-    except Exception:
-        pass
+        r = requests.get(url, headers=headers, timeout=15)
 
-    return {}, sha
+        if r.status_code == 404:
+            return {}, ""
+
+        r.raise_for_status()
+
+        # ここが重要：暗黙の decode を避ける
+        payload = json.loads(r.content.decode("utf-8", errors="replace"))
+
+        sha = payload.get("sha", "") or ""
+        content_b64 = payload.get("content", "") or ""
+
+        # GitHub の content は改行を含む場合がある
+        content_b64 = content_b64.replace("\n", "").replace("\r", "")
+
+        try:
+            decoded = base64.b64decode(content_b64).decode("utf-8", errors="replace")
+            data = json.loads(decoded)
+            if isinstance(data, dict):
+                data = {
+                    str(k): str(v)
+                    for k, v in data.items()
+                    if isinstance(v, str)
+                }
+                return data, sha
+        except Exception:
+            # content が壊れている/JSONでない場合でも落とさない
+            return {}, sha
+
+        return {}, sha
+
+    except Exception as e:
+        # 起動を落とさない：UI側で原因を見せたければ st.warning にしてもOK
+        # st.warning(f"GitHubテンプレ取得に失敗: {e}")
+        return {}, ""
 
 
 def github_put_file_json(data: Dict[str, str], sha: str, commit_message: str) -> None:

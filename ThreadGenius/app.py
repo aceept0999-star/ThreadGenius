@@ -287,14 +287,6 @@ def persist_personas_to_github(commit_message: str) -> None:
     st.session_state.personas = [dict_to_persona(d) for d in personas_data]
     st.session_state.personas_sha = sha
 
-# =========================================================
-# 起動時：personas を GitHub から復元（初回のみ）
-# =========================================================
-if "personas" not in st.session_state:
-    personas_data, sha = github_get_personas_json()
-    st.session_state.personas = [dict_to_persona(d) for d in personas_data]
-    st.session_state.personas_sha = sha
-
 # -------------------------
 # Session State Init
 # -------------------------

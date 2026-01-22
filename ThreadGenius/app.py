@@ -52,11 +52,12 @@ def _gh_conf() -> Tuple[str, str, str, str]:
     Streamlit Secrets から GitHub保存設定を読む。
     Secretsが無い場合も落とさない（空文字を返す）。
     """
-    token = st.secrets.get("GITHUB_TOKEN", "")
-    owner = st.secrets.get("GITHUB_OWNER", "")
-    repo = st.secrets.get("GITHUB_REPO", "")
-    path = st.secrets.get("GITHUB_TEMPLATES_PATH", "ThreadGenius/user_templates.json")
+    token = (st.secrets.get("GITHUB_TOKEN", "") or "").strip()
+    owner = (st.secrets.get("GITHUB_OWNER", "") or "").strip()
+    repo  = (st.secrets.get("GITHUB_REPO", "") or "").strip()
+    path  = (st.secrets.get("GITHUB_TEMPLATES_PATH", "ThreadGenius/user_templates.json") or "").strip()
     return token, owner, repo, path
+
 
 
 def github_get_file_json() -> Tuple[Dict[str, str], str]:

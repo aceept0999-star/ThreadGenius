@@ -461,13 +461,23 @@ with tab1:
         preset_keys = list(combined_templates.keys())
         preset_index = preset_keys.index(st.session_state.preset_key) if st.session_state.preset_key in preset_keys else 0
 
+        # preset_keys は既に list(combined_templates.keys()) で作ってある前提
+
+        # 初回だけ widget の初期値を入れる（存在しない値なら（選択なし）へ）
+        if "preset_key_select" not in st.session_state:
+            st.session_state.preset_key_select = st.session_state.get("preset_key", "（選択なし）")
+        if st.session_state.preset_key_select not in preset_keys:
+            st.session_state.preset_key_select = "（選択なし）"
+
         preset_key = st.selectbox(
             "テンプレを選択（選択後に「反映」ボタンで本文へ反映）",
             preset_keys,
-            index=preset_index,
             key="preset_key_select",
         )
+
+        # 同期（ここでは index を使わない）
         st.session_state.preset_key = preset_key
+
 
              # テンプレ本文プレビュー
         def _get_template_text(selected_key: str) -> str:

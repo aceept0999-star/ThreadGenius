@@ -801,27 +801,28 @@ with tab1:
 # =========================================================
 with tab2:
     st.subheader("🎭 ペルソナ管理")
-    st.write("DEBUG session_state keys:", list(st.session_state.keys()))
 
-st.write("DEBUG 名前:", st.session_state.get("persona_name_input"))
-st.write("DEBUG 専門分野:", st.session_state.get("persona_expertise_input"))
-st.write("DEBUG 口調:", st.session_state.get("persona_tone_input"))
-st.write("DEBUG 価値観:", st.session_state.get("persona_values_input"))
-st.write("DEBUG ターゲット:", st.session_state.get("persona_target_input"))
-st.write("DEBUG 目標:", st.session_state.get("persona_goal_input"))
+    # --- DEBUG（Tab2内でのみ表示） ---
+    with st.expander("DEBUG（開発用）", expanded=False):
+        st.info("DEBUG: tab2 reached")
+        st.write("DEBUG session_state keys:", list(st.session_state.keys()))
+        st.write("DEBUG personas exists?:", "personas" in st.session_state)
+        st.write("DEBUG personas_sha exists?:", "personas_sha" in st.session_state)
 
-st.write("DEBUG personas(list) exists?:", "personas" in st.session_state)
-st.write("DEBUG personas len:", len(st.session_state.get("personas", [])))
+        st.write("DEBUG 名前:", st.session_state.get("persona_name_input"))
+        st.write("DEBUG 専門分野:", st.session_state.get("persona_expertise_input"))
+        st.write("DEBUG 口調:", st.session_state.get("persona_tone_input"))
+        st.write("DEBUG 価値観:", st.session_state.get("persona_values_input"))
+        st.write("DEBUG ターゲット:", st.session_state.get("persona_target_input"))
+        st.write("DEBUG 目標:", st.session_state.get("persona_goal_input"))
 
-
-    st.info("DEBUG: tab2 reached")  # ←これが出るか確認
-
-    st.write("DEBUG session_state keys:", list(st.session_state.keys()))
-    st.write("DEBUG personas exists?:", "personas" in st.session_state)
-    st.write("DEBUG personas_sha exists?:", "personas_sha" in st.session_state)
+    # --- 安全策：最低限の初期化（空白画面回避） ---
+    if "personas" not in st.session_state:
+        st.session_state.personas = []
+    if "personas_sha" not in st.session_state:
+        st.session_state.personas_sha = ""
 
     personas = st.session_state.get("personas", [])
-    st.write("DEBUG personas len:", len(personas))
 
     st.markdown("### 登録済みペルソナ")
     if not personas:
@@ -844,7 +845,7 @@ st.write("DEBUG personas len:", len(st.session_state.get("personas", [])))
 
                         # 選択中ペルソナが消えたら退避
                         if st.session_state.personas:
-                            if st.session_state.selected_persona_name == deleting_name:
+                            if st.session_state.get("selected_persona_name", "") == deleting_name:
                                 st.session_state.selected_persona_name = st.session_state.personas[0].name
                         else:
                             st.session_state.selected_persona_name = ""
@@ -893,6 +894,7 @@ st.write("DEBUG personas len:", len(st.session_state.get("personas", [])))
                     st.error(f"GitHub保存に失敗: {e}")
 
                 st.rerun()
+
 
 
 # =========================================================

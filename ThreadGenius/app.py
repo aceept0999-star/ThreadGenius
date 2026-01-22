@@ -616,14 +616,16 @@ with tab2:
                     st.caption(f"目標: {p.goals}")
                 with c2:
                     if st.button("🗑 削除", key=f"delete_persona_{idx}", use_container_width=True):
-                        # 選択中が消える場合は先頭へ退避
                         deleting_name = p.name
                         st.session_state.personas.pop(idx)
+
+                        # 選択中ペルソナが消えたら退避
                         if st.session_state.personas:
                             if st.session_state.selected_persona_name == deleting_name:
                                 st.session_state.selected_persona_name = st.session_state.personas[0].name
                         else:
                             st.session_state.selected_persona_name = ""
+
                         st.rerun()
 
     st.divider()
@@ -651,7 +653,6 @@ with tab2:
                     goals=(goals or "").strip(),
                 )
                 st.session_state.personas.append(new_p)
-                # 追加したら選択中にも反映
                 st.session_state.selected_persona_name = new_p.name
                 st.success("追加しました。")
                 st.rerun()
@@ -662,16 +663,12 @@ with tab2:
 # =========================================================
 with tab3:
     st.subheader("🔗 Threads連携")
-    st.caption("Community Cloudではブラウザ自動オープンが効きにくいので、認可URLを表示→code貼り付け方式にしています。")
-
-    # threads_api.py は OAuth URL生成/コード交換/投稿 を持つ想定
-    # 現行 threads_api.py: ThreadsAPIClient(get_authorization_url / exchange_code_for_token / create_post) [Source]
-    # [Source](https://raw.githubusercontent.com/aceept0999-star/ThreadGenius/main/ThreadGenius/threads_api.py)
+    st.caption("Community Cloud では自動でブラウザを開きにくいので、認可URL表示→code貼り付け方式にしています。")
 
     if not threads_app_id or not threads_app_secret:
         st.warning("サイドバーで Threads App ID / Secret を入力してください。")
     else:
-        # クライアント初期化（毎回作るが、tokenは内部に保持）
+        # まだ client が無ければ作成
         if st.session_state.threads_client is None:
             st.session_state.threads_client = ThreadsAPIClient(
                 app_id=threads_app_id,
@@ -683,10 +680,10 @@ with tab3:
         st.markdown("### 1) 認可URLを開いて code を取得")
         auth_url = client.get_authorization_url()
         st.code(auth_url, language="text")
-        st.link_button("🔓 認可ページを開く（別タブ）", auth_url)
+        st.link_button("🔐 認可ページを開く（別タブ）", auth_url)
 
         st.markdown("### 2) code を貼り付けてトークン取得")
-        code = st.text_input("code（URLの code= の値）", value="", key="threads_oauth_code")
+        code = st.text_input("code（URL の code= の値）", value="", key="threads_oauth_code")
 
         if st.button("✅ code を交換してログイン", use_container_width=True, key="exchange_code_btn"):
             if not code.strip():
@@ -703,7 +700,6 @@ with tab3:
 
         st.divider()
         st.markdown("### 3) テスト投稿（任意）")
-
         test_text = st.text_area(
             "投稿テキスト（500文字以内）",
             value="テスト投稿です。うまく送れていますか？（番号で返信してもらえると嬉しいです）\n1 はい 2 いいえ",
@@ -721,7 +717,7 @@ with tab3:
             except Exception as e:
                 st.error(f"投稿エラー: {e}")
 
-        st.caption("※ 投稿に失敗する場合は、Appの権限（threads_content_publish など）と有効なアクセストークンを確認してください。")
+        st.caption("※失敗する場合は、App権限（threads_content_publish等）と有効なアクセストークンを確認してください。")
 
 
 # =========================================================
@@ -731,6 +727,6 @@ with tab4:
     st.subheader("📊 分析")
     st.info("分析タブは現在プレースホルダです。今後、投稿の反応（views/likes/replies等）を取得して可視化します。")
 
-    st.markdown("#### 参考：threads_api.py の insights 取得")
+    st.markdown("#### 参考: threads_api.py の insights 取得")
     st.caption("threads_api.py には get_insights が実装されています（トークン取得後に post_id を指定）。")
-    st.caption("※ 現状はUI未接続のため、必要ならこのタブに post_id 入力→get_insights の表示を追加できます。")
+    st.caption("必要なら、このタブに post_id 入力→get_insights 表示を追加できます。")

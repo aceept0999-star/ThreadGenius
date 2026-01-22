@@ -469,8 +469,6 @@ with tab1:
         )
         st.session_state.preset_key = preset_key
 
-
-
         preset_key = st.selectbox(
             "テンプレを選択（選択後に「反映」ボタンで本文へ反映）",
             preset_keys,

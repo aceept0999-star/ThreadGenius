@@ -7,6 +7,7 @@ Claude APIを使用して、2026年最新Threadsアルゴリズムに最適化�
 - UIトグルで Calm優先（ノウハウ/数値）を切替（ui_mode_calm_priority）
 - テーマ選択で topic_tag を全投稿に強制（forced_topic_tag）
 - 人間味スコアを追加して上位表示を安定化
+- lens を付与して UI 側で検証しやすくする（app.py expander で表示）
 """
 
 import anthropic
@@ -62,6 +63,9 @@ class ThreadsPostGenerator:
 
         posts = self._parse_response(response.content[0].text, expected_count=num_variations)
 
+        # Draft段階でも念のため lens を補完（UIで N/A を減らす）
+        posts = [self._ensure_lens(p) for p in posts]
+
         # 2) Humanize（2パス）：Warm/Calm混在（Calm優先トグル対応）
         if self.enable_two_pass_humanize:
             if self.ui_mode_calm_priority:
@@ -106,6 +110,12 @@ class ThreadsPostGenerator:
         for p in posts:
             p["topic_tag"] = tag
         return posts
+
+    def _ensure_lens(self, post: Dict) -> Dict:
+        """lens が無い場合の安全なデフォルト付与（UI表示のN/A回避）"""
+        if not post.get("lens"):
+            post["lens"] = "N/A"
+        return post
 
     # =========================
     # PROMPTS
@@ -176,7 +186,8 @@ class ThreadsPostGenerator:
     "cta": "末尾の質問/呼びかけ",
     "predicted_stage": "Stage1-4",
     "conversation_trigger": "会話を誘発するポイント",
-    "reasoning": "なぜこの構成にしたか（100文字以内）"
+    "reasoning": "なぜこの構成にしたか（100文字以内）",
+    "lens": "N/A"
   }}
 ]
 </output_format>
@@ -193,6 +204,7 @@ class ThreadsPostGenerator:
             topic_tag = "#" + topic_tag
 
         predicted_stage = draft_post.get("predicted_stage", "Stage2")
+        lens = draft_post.get("lens", "N/A")
 
         if style_mode == "polite_calm":
             mode_label = "polite_calm（丁寧で落ち着いた会話：ノウハウ/数値向き）"
@@ -258,7 +270,8 @@ class ThreadsPostGenerator:
   "predicted_stage": "{predicted_stage}",
   "conversation_trigger": "返したくなる理由（短く）",
   "reasoning": "改善の意図（100文字以内）",
-  "style_mode": "{style_mode}"
+  "style_mode": "{style_mode}",
+  "lens": "{lens}"
 }}
 </output_format>
 """
@@ -281,15 +294,20 @@ class ThreadsPostGenerator:
             rewritten = self._parse_single_json_object(response.content[0].text)
             if not rewritten:
                 post["style_mode"] = style_mode
+                post = self._ensure_lens(post)
                 return post
 
             # topic_tag は強制（A）
             if self.forced_topic_tag:
                 rewritten["topic_tag"] = self.forced_topic_tag if self.forced_topic_tag.startswith("#") else f"#{self.forced_topic_tag}"
 
+            # lens が欠けた場合も補う
+            rewritten = self._ensure_lens(rewritten)
+
             # post_text が空なら戻す
             if not (rewritten.get("post_text") or "").strip():
                 post["style_mode"] = style_mode
+                post = self._ensure_lens(post)
                 return post
 
             # 500字カット（保険）
@@ -304,6 +322,7 @@ class ThreadsPostGenerator:
 
         except Exception:
             post["style_mode"] = style_mode
+            post = self._ensure_lens(post)
             return post
 
     def _parse_single_json_object(self, response_text: str) -> Dict:
@@ -368,7 +387,8 @@ class ThreadsPostGenerator:
                 "topic_tag": self.forced_topic_tag or "#ビジネス",
                 "predicted_stage": "Stage2",
                 "conversation_trigger": "質問を含む",
-                "reasoning": "空レスポンスのためフォールバック"
+                "reasoning": "空レスポンスのためフォールバック",
+                "lens": "N/A"
             }]
 
         parts = re.split(r'【\s*投稿\s*\d+\s*】', raw)
@@ -405,7 +425,8 @@ class ThreadsPostGenerator:
                 "topic_tag": self.forced_topic_tag or "#ビジネス",
                 "predicted_stage": "Stage2",
                 "conversation_trigger": "質問を含む",
-                "reasoning": "JSON取得に失敗したためテキストを分割して復元"
+                "reasoning": "JSON取得に失敗したためテキストを分割して復元",
+                "lens": "N/A"
             })
 
         return posts

@@ -114,13 +114,33 @@ def github_get_file_json() -> Tuple[Dict[str, str], str]:
         # 起動を落とさない：UI側で原因を見せたければ st.warning にしてもOK
         # st.warning(f"GitHubテンプレ取得に失敗: {e}")
         return {}, ""
-
+    
+def _assert_github_secrets_ascii(token: str, owner: str, repo: str, path: str) -> None:
+    """
+    requests のヘッダは latin-1 制約があり、非ASCII（全角など）が混ざると落ちる。
+    その前に検出して、分かりやすいエラーにする。
+    """
+    try:
+        (token or "").encode("ascii")
+        (owner or "").encode("ascii")
+        (repo or "").encode("ascii")
+        (path or "").encode("ascii")
+    except UnicodeEncodeError as e:
+        raise RuntimeError(
+            "GitHub Secrets に全角/非ASCII文字が混入しています。"
+            "Streamlit Secrets の値を『英数字と記号のみ』に修正してください。"
+            f"（詳細: {e}）"
+        )
 
 def github_put_file_json(data: Dict[str, str], sha: str, commit_message: str) -> None:
     """
     GitHub Contents API へ JSON を保存（新規/更新）。
     """
     token, owner, repo, path = _gh_conf()
+
+    # ★ここ（_gh_conf() の直後）でチェック
+    _assert_github_secrets_ascii(token, owner, repo, path)
+
     if not (token and owner and repo and path):
         raise RuntimeError("GitHub Secrets が未設定です（GITHUB_TOKEN 等）")
 
@@ -139,7 +159,6 @@ def github_put_file_json(data: Dict[str, str], sha: str, commit_message: str) ->
 
     r = requests.put(url, headers=headers, json=payload, timeout=15)
     r.raise_for_status()
-
 
 # -------------------------
 # Session State Init

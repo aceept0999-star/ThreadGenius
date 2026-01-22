@@ -455,11 +455,12 @@ with tab1:
         combined_templates: Dict[str, str] = {}
         combined_templates.update(PRESET_NEWS_TEMPLATES)
 
-        for k, v in user_templates.items():
+               for k, v in user_templates.items():
             combined_templates[f"🧷マイテンプレ｜{k}"] = v
 
-                preset_keys = list(combined_templates.keys())
+        preset_keys = list(combined_templates.keys())
         preset_index = preset_keys.index(st.session_state.preset_key) if st.session_state.preset_key in preset_keys else 0
+
 
         preset_key = st.selectbox(
             "テンプレを選択（選択後に「反映」ボタンで本文へ反映）",

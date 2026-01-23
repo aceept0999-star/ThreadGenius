@@ -331,7 +331,17 @@ class ThreadsPostGenerator:
                 post["style_mode"] = style_mode
                 post = self._ensure_lens(post)
                 return post
-
+                
+            # ★B案：末尾CTA強制（ローテ＋重複除去＋220字上限）
+            # post_index は draft_post の predicted_stage 等からは取れないので、
+            # ひとまず style_mode ごとの生成順を使う：fallbackとして hash を使う
+            post_index = int(abs(hash((draft_text, style_mode))) % 1000)
+            rewritten["post_text"] = self._enforce_short_cta(
+             rewritten.get("post_text") or "",
+             post_index=post_index,
+             max_chars=220
+             )
+             
             # 500字カット（保険）
             rewritten["post_text"] = (rewritten.get("post_text") or "")[:500]
 

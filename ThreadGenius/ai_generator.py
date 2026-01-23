@@ -342,13 +342,6 @@ class ThreadsPostGenerator:
              max_chars=220
              )
              
-            # 500字カット（保険）
-            rewritten["post_text"] = (rewritten.get("post_text") or "")[:500]
-
-            # 質問が無い場合は補う（保険）
-            if "？" not in rewritten["post_text"] and "?" not in rewritten["post_text"]:
-                rewritten["post_text"] = (rewritten["post_text"][:460] + "\n\nあなたはどこで詰まりましたか？")[:500]
-
             rewritten["style_mode"] = style_mode
             return rewritten
 

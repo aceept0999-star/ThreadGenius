@@ -394,7 +394,8 @@ class ThreadsPostGenerator:
             except json.JSONDecodeError:
                 pass
 
-        fenced = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+        # 非貪欲：最初のJSON配列を最短一致で拾う
+        first_array = re.search(r'\[\s*\{.*?\}\s*\]', text, re.DOTALL)
         if fenced:
             try:
                 posts = json.loads(fenced.group(1))

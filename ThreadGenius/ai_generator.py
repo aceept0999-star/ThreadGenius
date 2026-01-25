@@ -61,7 +61,13 @@ class ThreadsPostGenerator:
             messages=[{"role": "user", "content": prompt}]
         )
 
-        posts = self._parse_response(response.content[0].text, expected_count=num_variations)
+       draft_text = "".join(
+         b.text for b in response.content
+         if getattr(b, "type", "") == "text" and getattr(b, "text", None)
+)
+
+       posts = self._parse_response(draft_text, expected_count=num_variations)
+
 
         # Draft段階でも念のため lens を補完（UIで N/A を減らす）
         posts = [self._ensure_lens(p) for p in posts]

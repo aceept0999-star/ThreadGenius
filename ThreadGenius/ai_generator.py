@@ -334,25 +334,44 @@ class ThreadsPostGenerator:
         """2パス目で“人間味”に寄せる。失敗時は原文を返す（style_mode付与）。"""
         prompt = self._build_prompt_humanize(persona, post, style_mode=style_mode)
 
-        try:
-            response = self.client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=1200,
-                temperature=self.humanize_temperature,
-                messages=[{"role": "user", "content": prompt}]
-            )
-        human_text = "".join(
-          b.text for b in response.content
-          if getattr(b, "type", "") == "text" and getattr(b, "text", None)
-)
+       try:
+    response = self.client.messages.create(
+        model="claude-3-haiku-20240307",
+        max_tokens=1200,
+        temperature=self.humanize_temperature,
+        messages=[{"role": "user", "content": prompt}]
+    )
 
-        rewritten = self._parse_single_json_object(human_text)
+    human_text = "".join(
+        b.text for b in response.content
+        if getattr(b, "type", "") == "text" and getattr(b, "text", None)
+    )
 
-            if not rewritten:
-                post["style_mode"] = style_mode
-                post = self._ensure_lens(post)
-                return post
+    rewritten = self._parse_single_json_object(human_text)
 
+    if not rewritten:
+        post["style_mode"] = style_mode
+        post = self._ensure_lens(post)
+        return post
+
+    rewritten["style_mode"] = style_mode
+    ...
+    return rewritten
+
+except Exception:
+    post["style_mode"] = style_mode
+    post = self._ensure_lens(post)
+    return post
+
+    rewritten["style_mode"] = style_mode
+    ...
+    return rewritten
+
+except Exception:
+    post["style_mode"] = style_mode
+    post = self._ensure_lens(post)
+    return post
+    
             rewritten["style_mode"] = style_mode  # ★早めに付与して判定を安定化
 
             # topic_tag は強制（A）

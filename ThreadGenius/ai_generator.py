@@ -341,7 +341,13 @@ class ThreadsPostGenerator:
                 temperature=self.humanize_temperature,
                 messages=[{"role": "user", "content": prompt}]
             )
-            rewritten = self._parse_single_json_object(response.content[0].text)
+        human_text = "".join(
+          b.text for b in response.content
+          if getattr(b, "type", "") == "text" and getattr(b, "text", None)
+)
+
+        rewritten = self._parse_single_json_object(human_text)
+
             if not rewritten:
                 post["style_mode"] = style_mode
                 post = self._ensure_lens(post)

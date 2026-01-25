@@ -86,15 +86,15 @@ class ThreadsPostGenerator:
             calm_posts = [x for x in humanized_pool if x.get("style_mode") == "polite_calm"]
             warm_posts = [x for x in humanized_pool if x.get("style_mode") == "polite_warm"]
 
-            posts = (calm_posts[:calm_n] + warm_posts[:warm_n])    
-        # ★必ず num_variations 件にする：不足分は Draft を追加して埋める
-                if len(posts) < num_variations:
+            posts = (calm_posts[:calm_n] + warm_posts[:warm_n])
+
+            # ★必ず num_variations 件にする：不足分は Draft を追加して埋める
+            if len(posts) < num_variations:
                 need = num_variations - len(posts)
                 used = set((p.get("post_text") or "").strip() for p in posts)
                 fillers = []
-                for d in posts[:0]:  # no-op: keep diff minimal
-                    pass
-                for d in (self._ensure_lens(x) for x in (self._parse_response(response.content[0].text, expected_count=num_variations) or [])):
+                draft_posts = self._parse_response(response.content[0].text, expected_count=num_variations) or []
+                for d in (self._ensure_lens(x) for x in draft_posts):
                     t = (d.get("post_text") or "").strip()
                     if t and t not in used:
                         d["style_mode"] = d.get("style_mode") or "draft"

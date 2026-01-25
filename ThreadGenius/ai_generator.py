@@ -86,7 +86,23 @@ class ThreadsPostGenerator:
             calm_posts = [x for x in humanized_pool if x.get("style_mode") == "polite_calm"]
             warm_posts = [x for x in humanized_pool if x.get("style_mode") == "polite_warm"]
 
-            posts = (calm_posts[:calm_n] + warm_posts[:warm_n])
+            posts = (calm_posts[:calm_n] + warm_posts[:warm_n])    
+        # ★必ず num_variations 件にする：不足分は Draft を追加して埋める
+                if len(posts) < num_variations:
+                need = num_variations - len(posts)
+                used = set((p.get("post_text") or "").strip() for p in posts)
+                fillers = []
+                for d in posts[:0]:  # no-op: keep diff minimal
+                    pass
+                for d in (self._ensure_lens(x) for x in (self._parse_response(response.content[0].text, expected_count=num_variations) or [])):
+                    t = (d.get("post_text") or "").strip()
+                    if t and t not in used:
+                        d["style_mode"] = d.get("style_mode") or "draft"
+                        fillers.append(d)
+                        used.add(t)
+                    if len(fillers) >= need:
+                        break
+                posts = (posts + fillers)[:num_variations]
 
         # 3) ★タグ統一（A）: forced_topic_tag があれば全投稿に強制適用
         posts = self._apply_forced_topic_tag(posts)
@@ -95,6 +111,12 @@ class ThreadsPostGenerator:
         scored_posts = [self._score_post(post, persona) for post in posts]
         scored_posts.sort(key=lambda x: x.get("score", 0), reverse=True)
 
+        # ★最終保険：どうしても欠けたらフォールバックで穴埋め
+        if len(scored_posts) < num_variations:
+            missing = num_variations - len(scored_posts)
+            fillers = self._fallback_parse("", expected_count=missing)
+            fillers = [self._score_post(self._apply_forced_topic_tag([f])[0], persona) for f in fillers]
+            scored_posts = scored_posts + fillers
         return scored_posts[:num_variations]
 
     def _apply_forced_topic_tag(self, posts: List[Dict]) -> List[Dict]:
@@ -319,6 +341,8 @@ class ThreadsPostGenerator:
                 post = self._ensure_lens(post)
                 return post
 
+            rewritten["style_mode"] = style_mode  # ★早めに付与して判定を安定化
+
             # topic_tag は強制（A）
             if self.forced_topic_tag:
                 rewritten["topic_tag"] = self.forced_topic_tag if self.forced_topic_tag.startswith("#") else f"#{self.forced_topic_tag}"
@@ -346,7 +370,6 @@ class ThreadsPostGenerator:
                 # enforceが無い/失敗しても落とさず継続（最小安定化）
                 pass
              
-            rewritten["style_mode"] = style_mode
             return rewritten
 
         except Exception:
@@ -361,18 +384,20 @@ class ThreadsPostGenerator:
         import re
 
         text = (response_text or "").strip()
-        # 非貪欲で最初のJSONオブジェクトだけ拾う
-        m = re.search(r'\{\s*"(?:\\.|[^"\\])*"\s*:\s*.*?\}', text, re.DOTALL)
-        if not m:
-            return {}
-
-        try:
-            obj = json.loads(m.group(0))
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            return {}
-
+        # 1) ```json ... ``` があれば最優先
+        fenced = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+        candidates = []
+        if fenced:
+            candidates.append(fenced.group(1))
+        # 2) それ以外は { ... } を非貪欲で複数拾って順に試す
+        candidates += re.findall(r"\{.*?\}", text, re.DOTALL)
+        for c in candidates:
+            try:
+                obj = json.loads(c)
+                if isinstance(obj, dict):
+                    return obj
+            except Exception:
+                continue
         return {}
 
     # =========================
@@ -385,25 +410,24 @@ class ThreadsPostGenerator:
 
         text = (response_text or "").strip()
 
-        first_array = re.search(r'\[\s*\{.*\}\s*\]', text, re.DOTALL)
-        if first_array:
-            try:
-                posts = json.loads(first_array.group(0))
-                if isinstance(posts, list) and posts:
-                    return posts
-            except json.JSONDecodeError:
-                pass
-
-        # 非貪欲：最初のJSON配列を最短一致で拾う
-        first_array = re.search(r'\[\s*\{.*?\}\s*\]', text, re.DOTALL)
+        # 1) ```json ... ``` を最優先
+        fenced = re.search(r"```json\s*(\[.*?\])\s*```", text, re.DOTALL)
         if fenced:
             try:
                 posts = json.loads(fenced.group(1))
                 if isinstance(posts, list) and posts:
                     return posts
-                if isinstance(posts, dict):
-                    return [posts]
-            except json.JSONDecodeError:
+            except Exception:
+                pass
+
+        # 2) 次に [ { ... }, { ... } ] を非貪欲で拾う
+        first_array = re.search(r"\[\s*\{.*?\}\s*\]", text, re.DOTALL)
+        if first_array:
+            try:
+                posts = json.loads(first_array.group(0))
+                if isinstance(posts, list) and posts:
+                    return posts
+            except Exception:
                 pass
 
         return self._fallback_parse(text, expected_count=expected_count)

@@ -333,22 +333,6 @@ class ThreadsPostGenerator:
                 return post
                 
             # ★B案：末尾CTA強制（ローテ＋重複除去＋220字上限）
-            # post_index は draft_post の predicted_stage 等からは取れないので、
-            # ひとまず style_mode ごとの生成順を使う：fallbackとして hash を使う
-            post_index = int(abs(hash((draft_text, style_mode))) % 1000)
-            rewritten["post_text"] = self._enforce_short_cta(
-             rewritten.get("post_text") or "",
-             post_index=post_index,
-             max_chars=220
-             )
-             
-            rewritten["style_mode"] = style_mode
-            return rewritten
-
-        except Exception:
-            post["style_mode"] = style_mode
-            post = self._ensure_lens(post)
-            return post
             # draft_text 未定義バグ修正：元の下書き本文から seed を作る
             base_text = (post.get("post_text") or "")
             post_index = int(abs(hash((base_text, style_mode))) % 1000)
@@ -361,6 +345,15 @@ class ThreadsPostGenerator:
             except Exception:
                 # enforceが無い/失敗しても落とさず継続（最小安定化）
                 pass
+             
+            rewritten["style_mode"] = style_mode
+            return rewritten
+
+        except Exception:
+            post["style_mode"] = style_mode
+            post = self._ensure_lens(post)
+            return post
+            
 
     def _parse_single_json_object(self, response_text: str) -> Dict:
         """Humanizeの戻り（JSONオブジェクト）を抽出してdictにする"""
@@ -368,7 +361,8 @@ class ThreadsPostGenerator:
         import re
 
         text = (response_text or "").strip()
-        m = re.search(r'\{\s*".*"\s*\}', text, re.DOTALL)
+        # 非貪欲で最初のJSONオブジェクトだけ拾う
+        m = re.search(r'\{\s*"(?:\\.|[^"\\])*"\s*:\s*.*?\}', text, re.DOTALL)
         if not m:
             return {}
 

@@ -12,11 +12,10 @@ Claude APIを使用して、2026年最新Threadsアルゴリズムに最適化�
 
 from __future__ import annotations
 
+import logging
 import anthropic
 from typing import List, Dict
-
 from config import PersonaConfig, ThreadsAlgorithmRules, PostTemplate, SCORING_WEIGHTS
-
 
 class ThreadsPostGenerator:
     """Threads投稿生成エンジン"""

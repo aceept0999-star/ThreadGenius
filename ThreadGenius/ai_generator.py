@@ -66,11 +66,15 @@ class ThreadsPostGenerator:
 
         # Claude応答は複数ブロックになる場合があるため必ず結合する
         draft_text = "".join(
-            b.text for b in response.content
-            if getattr(b, "type", "") == "text" and getattr(b, "text", None)
+          b.text for b in response.content
+          if getattr(b, "type", "") == "text" and getattr(b, "text", None)
         )
 
-        posts = self._parse_response(draft_text, expected_count=num_variations)
+       # DEBUG: Claudeの返答が空か、JSONが崩れているかを見る（※一時的）
+       print("DEBUG draft_text len:", len(draft_text))
+       print("DEBUG draft_text head:", draft_text[:400])
+
+      posts = self._parse_response(draft_text, expected_count=num_variations)
 
         # Draft段階でも念のため lens を補完（UIで N/A を減らす）
         posts = [self._ensure_lens(p) for p in posts]

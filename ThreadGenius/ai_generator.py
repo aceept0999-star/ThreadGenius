@@ -58,10 +58,10 @@ class ThreadsPostGenerator:
         prompt = self._build_prompt_draft(persona, news_content, num_variations)
 
         response = self.client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=4000,
-            temperature=self.draft_temperature,
-            messages=[{"role": "user", "content": prompt}]
+          model="claude-3-haiku-20240307",
+          max_tokens=4000,
+          temperature=self.draft_temperature,
+          messages=[{"role": "user", "content": prompt}]
         )
 
         # Claude応答は複数ブロックになる場合があるため必ず結合する
@@ -70,9 +70,12 @@ class ThreadsPostGenerator:
           if getattr(b, "type", "") == "text" and getattr(b, "text", None)
         )
 
-       # DEBUG: Claudeの返答が空か、JSONが崩れているかを見る（※一時的）
-       print("DEBUG draft_text len:", len(draft_text))
-       print("DEBUG draft_text head:", draft_text[:400])
+        # DEBUG（※一時的。起動確認できたら消してOK）
+        print("DEBUG draft_text len:", len(draft_text))
+        print("DEBUG draft_text head:", draft_text[:400])
+
+        posts = self._parse_response(draft_text, expected_count=num_variations)
+
 
       posts = self._parse_response(draft_text, expected_count=num_variations)
 

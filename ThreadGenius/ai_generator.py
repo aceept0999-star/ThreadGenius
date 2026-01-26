@@ -76,9 +76,6 @@ class ThreadsPostGenerator:
 
         posts = self._parse_response(draft_text, expected_count=num_variations)
 
-
-      posts = self._parse_response(draft_text, expected_count=num_variations)
-
         # Draft段階でも念のため lens を補完（UIで N/A を減らす）
         posts = [self._ensure_lens(p) for p in posts]
 

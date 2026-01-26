@@ -739,6 +739,9 @@ with tab1:
 
             # 再生成で表示キーを変える（Streamlitの更新不具合回避）
             st.session_state.generation_run_id = datetime.now().strftime("%Y%m%d%H%M%S")
+            st.write("DEBUG len(posts):", len(posts))
+            st.write("DEBUG type(posts[0]):", type(posts[0]) if posts else "EMPTY")
+            st.write("DEBUG posts[0] keys:", list(posts[0].keys()) if posts and isinstance(posts[0], dict) else posts[0])
             st.session_state.generated_posts = posts
             st.write("DEBUG UI num_posts:", int(num_posts))
             st.write("DEBUG len(posts from generator):", len(posts))

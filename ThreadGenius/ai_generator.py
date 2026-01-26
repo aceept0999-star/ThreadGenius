@@ -54,19 +54,20 @@ class ThreadsPostGenerator:
         # 1) Draft生成（JSON配列）
         prompt = self._build_prompt_draft(persona, news_content, num_variations)
 
-        response = self.client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=4000,
-            temperature=self.draft_temperature,
-            messages=[{"role": "user", "content": prompt}]
-        )
+    response = self.client.messages.create(
+        model="claude-3-haiku-20240307",
+        max_tokens=4000,
+        temperature=self.draft_temperature,
+        messages=[{"role": "user", "content": prompt}]
+    )
 
-       draft_text = "".join(
-         b.text for b in response.content
-         if getattr(b, "type", "") == "text" and getattr(b, "text", None)
-)
+    draft_text = "".join(
+        b.text for b in response.content
+        if getattr(b, "type", "") == "text" and getattr(b, "text", None)
+    )
 
-       posts = self._parse_response(draft_text, expected_count=num_variations)
+posts = self._parse_response(draft_text, expected_count=num_variations)
+
 
 
         # Draft段階でも念のため lens を補完（UIで N/A を減らす）
@@ -331,66 +332,52 @@ class ThreadsPostGenerator:
     # HUMANIZE
     # =========================
     def _humanize_post(self, post: Dict, persona: PersonaConfig, style_mode: str) -> Dict:
-        """2パス目で“人間味”に寄せる。失敗時は原文を返す（style_mode付与）。"""
-        prompt = self._build_prompt_humanize(persona, post, style_mode=style_mode)
+    """2パス目で“人間味”に寄せる。失敗時は原文を返す（style_mode付与）。"""
+    prompt = self._build_prompt_humanize(persona, post, style_mode=style_mode)
 
-       try:
-    response = self.client.messages.create(
-        model="claude-3-haiku-20240307",
-        max_tokens=1200,
-        temperature=self.humanize_temperature,
-        messages=[{"role": "user", "content": prompt}]
-    )
+    try:
+        response = self.client.messages.create(
+            model="claude-3-haiku-20240307",
+            max_tokens=1200,
+            temperature=self.humanize_temperature,
+            messages=[{"role": "user", "content": prompt}]
+        )
 
-    human_text = "".join(
-        b.text for b in response.content
-        if getattr(b, "type", "") == "text" and getattr(b, "text", None)
-    )
+        human_text = "".join(
+            b.text for b in response.content
+            if getattr(b, "type", "") == "text" and getattr(b, "text", None)
+        )
 
-    rewritten = self._parse_single_json_object(human_text)
+        rewritten = self._parse_single_json_object(human_text)
 
-    if not rewritten:
-        post["style_mode"] = style_mode
-        post = self._ensure_lens(post)
-        return post
+        # パース失敗 → 元を返す
+        if not rewritten:
+            post["style_mode"] = style_mode
+            return self._ensure_lens(post)
 
-    rewritten["style_mode"] = style_mode
-    ...
-    return rewritten
+        # style_mode を早めに付与
+        rewritten["style_mode"] = style_mode
 
-except Exception:
-    post["style_mode"] = style_mode
-    post = self._ensure_lens(post)
-    return post
+        # topic_tag は強制（A）
+        if self.forced_topic_tag:
+            rewritten["topic_tag"] = (
+                self.forced_topic_tag
+                if self.forced_topic_tag.startswith("#")
+                else f"#{self.forced_topic_tag}"
+            )
 
-    rewritten["style_mode"] = style_mode
-    ...
-    return rewritten
+        # lens が欠けた場合も補う
+        rewritten = self._ensure_lens(rewritten)
 
-except Exception:
-    post["style_mode"] = style_mode
-    post = self._ensure_lens(post)
-    return post
-    
-            rewritten["style_mode"] = style_mode  # ★早めに付与して判定を安定化
+        # post_text が空なら戻す
+        if not (rewritten.get("post_text") or "").strip():
+            post["style_mode"] = style_mode
+            return self._ensure_lens(post)
 
-            # topic_tag は強制（A）
-            if self.forced_topic_tag:
-                rewritten["topic_tag"] = self.forced_topic_tag if self.forced_topic_tag.startswith("#") else f"#{self.forced_topic_tag}"
-
-            # lens が欠けた場合も補う
-            rewritten = self._ensure_lens(rewritten)
-
-            # post_text が空なら戻す
-            if not (rewritten.get("post_text") or "").strip():
-                post["style_mode"] = style_mode
-                post = self._ensure_lens(post)
-                return post
-                
-            # ★B案：末尾CTA強制（ローテ＋重複除去＋220字上限）
-            # draft_text 未定義バグ修正：元の下書き本文から seed を作る
-            base_text = (post.get("post_text") or "")
-            post_index = int(abs(hash((base_text, style_mode))) % 1000)
+        # 末尾CTA強制（存在する場合のみ）
+        base_text = (post.get("post_text") or "")
+        post_index = int(abs(hash((base_text, style_mode))) % 1000)
+        if hasattr(self, "_enforce_short_cta"):
             try:
                 rewritten["post_text"] = self._enforce_short_cta(
                     rewritten.get("post_text") or "",
@@ -398,15 +385,13 @@ except Exception:
                     max_chars=220
                 )
             except Exception:
-                # enforceが無い/失敗しても落とさず継続（最小安定化）
                 pass
-             
-            return rewritten
 
-        except Exception:
-            post["style_mode"] = style_mode
-            post = self._ensure_lens(post)
-            return post
+        return rewritten
+
+    except Exception:
+        post["style_mode"] = style_mode
+        return self._ensure_lens(post)
             
 
     def _parse_single_json_object(self, response_text: str) -> Dict:

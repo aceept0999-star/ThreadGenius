@@ -57,17 +57,20 @@ class ThreadsPostGenerator:
         prompt = self._build_prompt_draft(persona, news_content, num_variations)
 
         response = self.client.messages.create(
-          model="claude-3-haiku-20240307",
-          max_tokens=4000,
-          temperature=self.draft_temperature,
-          messages=[{"role": "user", "content": prompt}]
+            model="claude-3-haiku-20240307",
+            max_tokens=4000,
+            temperature=self.draft_temperature,
+            messages=[{"role": "user", "content": prompt}],
         )
 
+        # Claude応答は複数ブロックになる場合があるため必ず結合
         draft_text = "".join(
-          b.text for b in response.content
-          if getattr(b, "type", "") == "text" and getattr(b, "text", None)
+            b.text
+            for b in getattr(response, "content", []) or []
+            if getattr(b, "type", "") == "text" and getattr(b, "text", None)
         )
 
+        # Streamlit Cloud の Logs に確実に出す（printより安定）
         logging.warning("DEBUG draft_text len: %s", len(draft_text))
         logging.warning("DEBUG draft_text head: %s", draft_text[:400])
 

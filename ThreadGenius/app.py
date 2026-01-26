@@ -782,11 +782,15 @@ with tab1:
 
                 # 表示キーをrun_idで変える
                 edit_key = f"post_text_{st.session_state.generation_run_id}_{i}"
+
+                # ★追加：post_textが空かどうか確定させる
+                st.write("DEBUG post_text repr:", repr(post.get("post_text", None))[:200])
+
                 post_text = st.text_area(
-                    "投稿本文（編集可）",
-                    value=post.get("post_text", ""),
-                    height=160,
-                    key=edit_key,
+                  "投稿本文（編集可）",
+                   value=post.get("post_text", ""),
+                   height=160,
+                   key=edit_key,
                 )
 
                 with st.expander("🔎 メタ情報（hook/body/cta など）"):

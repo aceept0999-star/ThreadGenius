@@ -171,7 +171,9 @@ class ThreadsPostGenerator:
                 b.text for b in response.content
                 if getattr(b, "type", "") == "text" and getattr(b, "text", None)
             )
-
+            logging.warning("DEBUG human_text len: %s", len(human_text))
+            logging.warning("DEBUG human_text head: %s", human_text[:400])
+            
             rewritten = self._parse_single_json_object(human_text)
 
             # パース失敗 → 元を返す

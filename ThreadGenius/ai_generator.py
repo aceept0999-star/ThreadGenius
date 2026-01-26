@@ -64,13 +64,11 @@ class ThreadsPostGenerator:
           messages=[{"role": "user", "content": prompt}]
         )
 
-        # Claude応答は複数ブロックになる場合があるため必ず結合する
         draft_text = "".join(
           b.text for b in response.content
           if getattr(b, "type", "") == "text" and getattr(b, "text", None)
         )
 
-        # DEBUG（※一時的。起動確認できたら消してOK）
         print("DEBUG draft_text len:", len(draft_text))
         print("DEBUG draft_text head:", draft_text[:400])
 

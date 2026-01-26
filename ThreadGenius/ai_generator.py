@@ -271,7 +271,7 @@ class ThreadsPostGenerator:
         tag = self.forced_topic_tag or "#ビジネス"
         return [
             {
-                "post_text": "",
+                "post_text": "（DEBUG）Claude返答が空/JSONパース失敗。Logsの draft_text を確認してください。"
                 "topic_tag": tag,
                 "predicted_stage": "Stage2",
                 "conversation_trigger": "質問を含む",

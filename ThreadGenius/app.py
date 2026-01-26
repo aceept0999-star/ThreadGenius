@@ -742,6 +742,7 @@ with tab1:
             st.write("DEBUG len(posts):", len(posts))
             st.write("DEBUG type(posts[0]):", type(posts[0]) if posts else "EMPTY")
             st.write("DEBUG posts[0] keys:", list(posts[0].keys()) if posts and isinstance(posts[0], dict) else posts[0])
+            st.write("DEBUG post_text head:", repr(posts[0].get("post_text"))[:200] if posts else "EMPTY")
             st.session_state.generated_posts = posts
             st.write("DEBUG UI num_posts:", int(num_posts))
             st.write("DEBUG len(posts from generator):", len(posts))

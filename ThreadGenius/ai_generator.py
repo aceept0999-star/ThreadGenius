@@ -68,10 +68,12 @@ class ThreadsPostGenerator:
           if getattr(b, "type", "") == "text" and getattr(b, "text", None)
         )
 
-        print("DEBUG draft_text len:", len(draft_text))
-        print("DEBUG draft_text head:", draft_text[:400])
+        # ✅ Streamlit Cloud Logsに確実に出す
+        logging.warning("DEBUG draft_text len: %s", len(draft_text))
+        logging.warning("DEBUG draft_text head: %s", draft_text[:400])
 
         posts = self._parse_response(draft_text, expected_count=num_variations)
+
 
         # Draft段階でも念のため lens を補完（UIで N/A を減らす）
         posts = [self._ensure_lens(p) for p in posts]

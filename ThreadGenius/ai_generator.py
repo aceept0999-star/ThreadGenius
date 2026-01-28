@@ -187,7 +187,8 @@ class ThreadsPostGenerator:
 
             # Claude応答は複数ブロックになる場合があるため必ず結合する
             human_text = "".join(
-                b.text for b in response.content
+                b.text
+                for b in getattr(response, "content", []) or []
                 if getattr(b, "type", "") == "text" and getattr(b, "text", None)
             )
             logging.warning("DEBUG human_text len: %s", len(human_text))

@@ -132,7 +132,7 @@ class ThreadsPostGenerator:
             base = ["warm"] * warm + ["calm"] * calm
         return (base + ["calm"] * n)[:n]
     
-        def __init__(
+    def __init__(
         self,
         api_key: str,
         enable_two_pass_humanize: bool = True,

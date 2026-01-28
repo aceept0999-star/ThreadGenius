@@ -131,6 +131,24 @@ class ThreadsPostGenerator:
             calm = max(0, n - warm)
             base = ["warm"] * warm + ["calm"] * calm
         return (base + ["calm"] * n)[:n]
+    
+    def __init__(
+        self,
+        api_key: str,
+        enable_two_pass_humanize: bool = True,
+        draft_temperature: float = 0.7,
+        humanize_temperature: float = 0.4,
+    ):
+        self.client = anthropic.Anthropic(api_key=api_key)
+
+        self.enable_two_pass_humanize = enable_two_pass_humanize
+        self.draft_temperature = draft_temperature
+        self.humanize_temperature = humanize_temperature
+
+        # UIから後で上書きされる前提
+        self.ui_mode_calm_priority = False
+        self.forced_topic_tag = None
+    
 
     # =========================
     # PROMPTS

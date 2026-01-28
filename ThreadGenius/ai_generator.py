@@ -19,119 +19,6 @@ from config import PersonaConfig, ThreadsAlgorithmRules, PostTemplate, SCORING_W
 
 
 class ThreadsPostGenerator:
-    # （既存の __init__ や他メソッドは残す想定）
-
-    def generate_posts(
-        self,
-        persona: PersonaConfig,
-        news_content: str,
-        num_variations: int = 5,
-    ) -> List[Dict]:
-        """Generate Threads posts. Always returns exactly num_variations items."""
-        num_variations = int(num_variations or 5)
-        if num_variations <= 0:
-            num_variations = 5
-
-        # --- Draft ---
-        prompt = self._build_prompt_draft(persona, news_content, num_variations)
-
-        try:
-            response = self.client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=4000,
-                temperature=self.draft_temperature,
-                messages=[{"role": "user", "content": prompt}],
-            )
-        except Exception:
-            logging.exception("ERROR draft messages.create failed")
-            posts = self._fallback_parse("", expected_count=num_variations)
-            posts = self._apply_forced_topic_tag(posts)
-            posts = [self._ensure_lens(p) for p in posts]
-            return [self._score_post(p, persona) for p in posts][:num_variations]
-
-        # Claude応答は複数ブロックになり得るため text ブロックのみ結合
-        draft_text = "".join(
-            b.text
-            for b in (getattr(response, "content", []) or [])
-            if getattr(b, "type", "") == "text" and getattr(b, "text", None)
-        )
-
-        logging.warning("DEBUG draft_text len: %s", len(draft_text))
-        logging.warning("DEBUG draft_text head: %s", draft_text[:400])
-
-        posts = self._parse_response(draft_text, expected_count=num_variations)
-        if not isinstance(posts, list):
-            posts = []
-
-        # dict のみ残す（文字列/リスト混入を除去）
-        posts = [p for p in posts if isinstance(p, dict)]
-
-        # lens / tag を最低限整える
-        posts = [self._ensure_lens(p) for p in posts]
-        posts = self._apply_forced_topic_tag(posts)
-
-        # --- 2-pass humanize (optional) ---
-        if getattr(self, "enable_two_pass_humanize", True):
-            style_modes = self._pick_style_modes(num_variations)
-            humanized: List[Dict] = []
-
-            for i in range(min(len(posts), num_variations)):
-                try:
-                    humanized.append(self._humanize_post(posts[i], persona, style_modes[i]))
-                except Exception:
-                    logging.exception("ERROR humanize failed at index=%s", i)
-                    p = dict(posts[i])
-                    p["style_mode"] = style_modes[i]
-                    humanized.append(self._ensure_lens(p))
-
-            posts = humanized
-
-        # --- Score & sort ---
-        scored_posts = [self._score_post(p, persona) for p in posts]
-        scored_posts.sort(
-            key=lambda x: float(x.get("score", 0.0) or 0.0),
-            reverse=True,
-        )
-
-        # --- Fill to exactly num_variations ---
-        missing = num_variations - len(scored_posts)
-        if missing > 0:
-            fillers = self._fallback_parse("", expected_count=missing)
-            fillers = self._apply_forced_topic_tag(fillers)
-            fillers = [self._ensure_lens(f) for f in fillers]
-            fillers = [self._score_post(f, persona) for f in fillers]
-            scored_posts.extend(fillers)
-
-        # --- Final guarantee: post_text must be non-empty ---
-        fixed: List[Dict] = []
-        for p in scored_posts[:num_variations]:
-            if not isinstance(p, dict):
-                p = {}
-
-            if not (p.get("post_text") or "").strip():
-                fb = self._fallback_parse("", expected_count=1)[0]
-                # inherit tag/lens/style_mode if available
-                fb["topic_tag"] = (p.get("topic_tag") or fb.get("topic_tag"))
-                fb["lens"] = (p.get("lens") or fb.get("lens") or "N/A")
-                fb["style_mode"] = (p.get("style_mode") or fb.get("style_mode") or "draft")
-                p = fb
-
-            fixed.append(self._ensure_lens(p))
-
-        logging.warning("DEBUG posts_final_count: %s", len(fixed))
-        return fixed
-
-    def _pick_style_modes(self, n: int) -> List[str]:
-        """UI toggle rule: Calm優先なら 4 Calm + 1 Warm, それ以外は 3 Warm + 2 Calm."""
-        n = int(n or 5)
-        if getattr(self, "ui_mode_calm_priority", False):
-            base = ["calm"] * max(0, n - 1) + ["warm"]
-        else:
-            warm = min(3, n)
-            calm = max(0, n - warm)
-            base = ["warm"] * warm + ["calm"] * calm
-        return (base + ["calm"] * n)[:n]
-    
     def __init__(
         self,
         api_key: str,
@@ -148,6 +35,17 @@ class ThreadsPostGenerator:
         # UIから後で上書きされる前提
         self.ui_mode_calm_priority = False
         self.forced_topic_tag = None
+
+    def _pick_style_modes(self, n: int) -> List[str]:
+        """UI toggle rule: Calm優先なら 4 Calm + 1 Warm, それ以外は 3 Warm + 2 Calm."""
+        n = int(n or 5)
+        if getattr(self, "ui_mode_calm_priority", False):
+            base = ["calm"] * max(0, n - 1) + ["warm"]
+        else:
+            warm = min(3, n)
+            calm = max(0, n - warm)
+            base = ["warm"] * warm + ["calm"] * calm
+        return (base + ["calm"] * n)[:n]
 
     # =========================
     # PROMPTS
@@ -219,10 +117,95 @@ INPUT (draft_post.post_text):
 """.strip()
 
     # =========================
+    # PUBLIC
+    # =========================
+    def generate_posts(
+        self,
+        persona: PersonaConfig,
+        news_content: str,
+        num_variations: int = 5,
+    ) -> List[Dict]:
+        """Generate Threads posts. Always returns exactly num_variations items."""
+        num_variations = int(num_variations or 5)
+        if num_variations <= 0:
+            num_variations = 5
+
+        prompt = self._build_prompt_draft(persona, news_content, num_variations)
+
+        try:
+            response = self.client.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=4000,
+                temperature=self.draft_temperature,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except Exception:
+            logging.exception("ERROR draft messages.create failed")
+            posts = self._fallback_parse("", expected_count=num_variations)
+            posts = self._apply_forced_topic_tag(posts)
+            posts = [self._ensure_lens(p) for p in posts]
+            return [self._score_post(p, persona) for p in posts][:num_variations]
+
+        draft_text = "".join(
+            b.text
+            for b in (getattr(response, "content", []) or [])
+            if getattr(b, "type", "") == "text" and getattr(b, "text", None)
+        )
+
+        logging.warning("DEBUG draft_text len: %s", len(draft_text))
+        logging.warning("DEBUG draft_text head: %s", draft_text[:400])
+
+        posts = self._parse_response(draft_text, expected_count=num_variations)
+        if not isinstance(posts, list):
+            posts = []
+
+        posts = [p for p in posts if isinstance(p, dict)]
+        posts = [self._ensure_lens(p) for p in posts]
+        posts = self._apply_forced_topic_tag(posts)
+
+        if getattr(self, "enable_two_pass_humanize", True):
+            style_modes = self._pick_style_modes(num_variations)
+            humanized: List[Dict] = []
+            for i in range(min(len(posts), num_variations)):
+                try:
+                    humanized.append(self._humanize_post(posts[i], persona, style_modes[i]))
+                except Exception:
+                    logging.exception("ERROR humanize failed at index=%s", i)
+                    p = dict(posts[i])
+                    p["style_mode"] = style_modes[i]
+                    humanized.append(self._ensure_lens(p))
+            posts = humanized
+
+        scored_posts = [self._score_post(p, persona) for p in posts]
+        scored_posts.sort(key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
+
+        missing = num_variations - len(scored_posts)
+        if missing > 0:
+            fillers = self._fallback_parse("", expected_count=missing)
+            fillers = self._apply_forced_topic_tag(fillers)
+            fillers = [self._ensure_lens(f) for f in fillers]
+            fillers = [self._score_post(f, persona) for f in fillers]
+            scored_posts.extend(fillers)
+
+        fixed: List[Dict] = []
+        for p in scored_posts[:num_variations]:
+            if not isinstance(p, dict):
+                p = {}
+            if not (p.get("post_text") or "").strip():
+                fb = self._fallback_parse("", expected_count=1)[0]
+                fb["topic_tag"] = (p.get("topic_tag") or fb.get("topic_tag"))
+                fb["lens"] = (p.get("lens") or fb.get("lens") or "N/A")
+                fb["style_mode"] = (p.get("style_mode") or fb.get("style_mode") or "draft")
+                p = fb
+            fixed.append(self._ensure_lens(p))
+
+        logging.warning("DEBUG posts_final_count: %s", len(fixed))
+        return fixed
+
+    # =========================
     # HUMANIZE
     # =========================
     def _humanize_post(self, post: Dict, persona: PersonaConfig, style_mode: str) -> Dict:
-        """2パス目で“人間味”に寄せる。失敗時は原文を返す（style_mode付与）。"""
         prompt = self._build_prompt_humanize(persona, post, style_mode=style_mode)
 
         try:
@@ -230,10 +213,9 @@ INPUT (draft_post.post_text):
                 model="claude-3-haiku-20240307",
                 max_tokens=1200,
                 temperature=self.humanize_temperature,
-                messages=[{"role": "user", "content": prompt}]
+                messages=[{"role": "user", "content": prompt}],
             )
 
-            # Claude応答は複数ブロックになる場合があるため必ず結合する
             human_text = "".join(
                 b.text
                 for b in getattr(response, "content", []) or []
@@ -241,18 +223,14 @@ INPUT (draft_post.post_text):
             )
             logging.warning("DEBUG human_text len: %s", len(human_text))
             logging.warning("DEBUG human_text head: %s", human_text[:400])
-            
-            rewritten = self._parse_single_json_object(human_text)
 
-            # パース失敗 → 元を返す
+            rewritten = self._parse_single_json_object(human_text)
             if not rewritten:
                 post["style_mode"] = style_mode
                 return self._ensure_lens(post)
 
-            # style_mode を早めに付与（後段の判定を安定化）
             rewritten["style_mode"] = style_mode
 
-            # topic_tag は強制（A）
             if self.forced_topic_tag:
                 rewritten["topic_tag"] = (
                     self.forced_topic_tag
@@ -260,15 +238,12 @@ INPUT (draft_post.post_text):
                     else f"#{self.forced_topic_tag}"
                 )
 
-            # lens が欠けた場合も補う
             rewritten = self._ensure_lens(rewritten)
 
-            # post_text が空なら戻す
             if not (rewritten.get("post_text") or "").strip():
                 post["style_mode"] = style_mode
                 return self._ensure_lens(post)
 
-            # 末尾CTA強制（メソッドが存在する場合のみ）
             base_text = (post.get("post_text") or "")
             post_index = int(abs(hash((base_text, style_mode))) % 1000)
 
@@ -277,7 +252,7 @@ INPUT (draft_post.post_text):
                     rewritten["post_text"] = self._enforce_short_cta(
                         rewritten.get("post_text") or "",
                         post_index=post_index,
-                        max_chars=220
+                        max_chars=220,
                     )
                 except Exception:
                     pass
@@ -313,13 +288,11 @@ INPUT (draft_post.post_text):
         return {}
 
     def _parse_response(self, response_text: str, expected_count: int = 5) -> List[Dict]:
-        """Claude APIのレスポンスをパース（JSON優先、ダメなら分割復元）"""
         import json
         import re
 
         text = (response_text or "").strip()
 
-        # 0) まず全文JSONとして読めるか（最優先）
         try:
             posts = json.loads(text)
             if isinstance(posts, list) and posts:
@@ -327,7 +300,6 @@ INPUT (draft_post.post_text):
         except Exception:
             pass
 
-        # 1) ```json ... ``` を最優先
         fenced = re.search(r"```json\s*(\[.*?\])\s*```", text, re.DOTALL)
         if fenced:
             try:
@@ -340,7 +312,6 @@ INPUT (draft_post.post_text):
         return self._fallback_parse(text, expected_count=expected_count)
 
     def _fallback_parse(self, text: str, expected_count: int = 5) -> List[Dict]:
-        """フォールバック：最低限 expected_count 件を返す"""
         tag = self.forced_topic_tag or "#ビジネス"
         return [
             {
@@ -374,6 +345,5 @@ INPUT (draft_post.post_text):
         return post
 
     def _score_post(self, post: Dict, persona: PersonaConfig) -> Dict:
-        # 既存実装があるなら差し替えてOK
         post["score"] = float(post.get("score", 0))
         return post

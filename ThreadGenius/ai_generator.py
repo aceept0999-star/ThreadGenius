@@ -360,4 +360,3 @@ INPUT (draft_post.post_text):
         # 既存実装があるなら差し替えてOK
         post["score"] = float(post.get("score", 0))
         return post
-

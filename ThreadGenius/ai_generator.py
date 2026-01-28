@@ -144,12 +144,34 @@ class ThreadsPostGenerator:
     # PROMPTS（※あなたの既存実装を残す想定）
     # =========================
     def _build_prompt_draft(self, persona: PersonaConfig, news_content: str, num_variations: int) -> str:
-        """既存実装がある前提。無い場合は起動のため最低限の文字列を返す。"""
-        return f"Generate {num_variations} Threads posts as JSON array."
+    tag = (self.forced_topic_tag or "").strip()
+    if tag and not tag.startswith("#"):
+        tag = "#" + tag
+    if not tag:
+        tag = "#ビジネス"
 
-    def _build_prompt_humanize(self, persona: PersonaConfig, draft_post: Dict, style_mode: str) -> str:
-        """既存実装がある前提。無い場合は起動のため最低限の文字列を返す。"""
-        return "Rewrite the post as JSON object."
+    return f"""
+    You are a Japanese social media copywriter specialized in Threads.
+
+    TASK:
+    Create {num_variations} Threads posts based on the given persona and news.
+
+    OUTPUT RULES (MUST FOLLOW):
+    - Output ONLY valid JSON. No prose. No markdown. No code fences.
+    - Output must be a JSON array of exactly {num_variations} objects.
+    - Each object MUST contain these keys (exactly these names):
+     - post_text (string): Japanese Threads post text (<= 220 chars)
+     - topic_tag (string): always "{tag}"
+     - predicted_stage (string)
+     - conversation_trigger (string)
+     - reasoning (string)
+     - lens (string)
+
+    CONTENT:
+    Persona (summary): {getattr(persona, "name", "N/A")}
+    News content:
+    {news_content}
+    """.strip()
 
     # =========================
     # HUMANIZE

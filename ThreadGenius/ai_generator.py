@@ -83,10 +83,18 @@ OUTPUT RULES (MUST FOLLOW):
   - conversation_trigger (string)
   - reasoning (string)
   - lens (string)
-- post_text MUST be Japanese only. Do NOT output English.
-- reasoning MUST be Japanese only. Do NOT output English.
-- post_text must contain no ASCII letters (A-Z, a-z).
-- reasoning must contain no ASCII letters (A-Z, a-z).
+
+LANGUAGE RULES (STRICT):
+- post_text MUST be Japanese only.
+- reasoning MUST be Japanese only.
+- Do NOT use any ASCII letters (A-Z, a-z) anywhere in post_text or reasoning.
+- Replace common acronyms with Japanese words:
+  - LP → ランディングページ
+  - KPI → 重要指標
+  - SNS → ＳＮＳ（全角で表記）
+  - CTA → 行動喚起
+  - Web → ウェブ
+  - URL → リンク
 
 CONTEXT:
 Persona: {persona_name}
@@ -109,18 +117,36 @@ News content:
         base_text = (draft_post.get("post_text") or "").strip()
 
         return f"""
+You are a Japanese social media copywriter.
+
+Task:
 Rewrite the following Japanese Threads post to match style_mode="{style_mode}".
 
-OUTPUT RULES (MUST FOLLOW):
+CRITICAL CONSTRAINTS (MUST FOLLOW):
+- Keep the original intent and topic. Do NOT introduce new topics.
 - Output ONLY valid JSON (no prose, no markdown fences).
 - Output must be ONE JSON object.
-- Return ALL keys exactly:
-  - post_text (string): non-empty, <= 220 chars
-  - topic_tag (string): always "{tag}"
-  - predicted_stage (string)
-  - conversation_trigger (string)
-  - reasoning (string)
-  - lens (string)
+- Do not include any additional keys beyond the specified keys.
+
+Return ALL keys exactly:
+- post_text (string): non-empty, <= 220 chars
+- topic_tag (string): always "{tag}"
+- predicted_stage (string)
+- conversation_trigger (string)
+- reasoning (string)
+- lens (string)
+
+LANGUAGE RULES (STRICT):
+- post_text MUST be Japanese only.
+- reasoning MUST be Japanese only.
+- Do NOT use any ASCII letters (A-Z, a-z) anywhere in post_text or reasoning.
+- Replace common acronyms with Japanese words:
+  - LP → ランディングページ
+  - KPI → 重要指標
+  - SNS → ＳＮＳ（全角で表記）
+  - CTA → 行動喚起
+  - Web → ウェブ
+  - URL → リンク
 
 INPUT (draft_post.post_text):
 {base_text}
@@ -372,4 +398,3 @@ INPUT (draft_post.post_text):
     def _score_post(self, post: Dict, persona: PersonaConfig) -> Dict:
         post["score"] = float(post.get("score", 0))
         return post
-

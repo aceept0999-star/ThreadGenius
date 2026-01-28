@@ -76,13 +76,17 @@ You are a Japanese social media copywriter. Create {num_variations} Threads post
 OUTPUT RULES (MUST FOLLOW):
 - Output ONLY valid JSON (no prose, no markdown fences).
 - Output must be a JSON array of exactly {num_variations} objects.
-- Each object MUST contain these keys exactly:
+- Each object MUST contain these keys exactly (no additional keys):
   - post_text (string): Japanese Threads post text (<= 220 chars)
   - topic_tag (string): always "{tag}"
   - predicted_stage (string)
   - conversation_trigger (string)
   - reasoning (string)
   - lens (string)
+- post_text MUST be Japanese only. Do NOT output English.
+- reasoning MUST be Japanese only. Do NOT output English.
+- post_text must contain no ASCII letters (A-Z, a-z).
+- reasoning must contain no ASCII letters (A-Z, a-z).
 
 CONTEXT:
 Persona: {persona_name}
@@ -368,3 +372,4 @@ INPUT (draft_post.post_text):
     def _score_post(self, post: Dict, persona: PersonaConfig) -> Dict:
         post["score"] = float(post.get("score", 0))
         return post
+

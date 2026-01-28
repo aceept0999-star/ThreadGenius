@@ -141,7 +141,7 @@ class ThreadsPostGenerator:
         return scored_posts[:num_variations]
 
     # =========================
-    # PROMPTS（※あなたの既存実装を残す想定）
+    # PROMPTS
     # =========================
     def _build_prompt_draft(self, persona: PersonaConfig, news_content: str, num_variations: int) -> str:
         tag = (self.forced_topic_tag or "").strip()

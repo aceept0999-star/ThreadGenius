@@ -19,6 +19,7 @@ from config import PersonaConfig, ThreadsAlgorithmRules, PostTemplate, SCORING_W
 
 
 class ThreadsPostGenerator:
+    
     def __init__(
         self,
         api_key: str,
@@ -26,13 +27,17 @@ class ThreadsPostGenerator:
         draft_temperature: float = 0.7,
         humanize_temperature: float = 0.4,
     ):
+        api_key = (api_key or "").strip()
+        if not api_key:
+           raise ValueError("Anthropic api_key is empty. Check Streamlit secrets / env var.")
+
+        # 認証はここで一本化（明示）
         self.client = anthropic.Anthropic(api_key=api_key)
 
         self.enable_two_pass_humanize = enable_two_pass_humanize
         self.draft_temperature = draft_temperature
         self.humanize_temperature = humanize_temperature
 
-        # UIから後で上書きされる前提
         self.ui_mode_calm_priority = False
         self.forced_topic_tag = None
 

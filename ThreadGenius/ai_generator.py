@@ -29,7 +29,7 @@ class ThreadsPostGenerator:
     ):
         api_key = (api_key or "").strip()
         if not api_key:
-           raise ValueError("Anthropic api_key is empty. Check Streamlit secrets / env var.")
+            raise ValueError("Anthropic api_key is empty. Check Streamlit secrets / env var.")
 
         # 認証はここで一本化（明示）
         self.client = anthropic.Anthropic(api_key=api_key)

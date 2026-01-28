@@ -31,6 +31,7 @@ class ThreadsPostGenerator:
         if not api_key:
             raise ValueError("Anthropic api_key is empty. Check Streamlit secrets / env var.")
 
+
         # 認証はここで一本化（明示）
         self.client = anthropic.Anthropic(api_key=api_key)
 
@@ -277,19 +278,34 @@ INPUT (draft_post.post_text):
 
         text = (response_text or "").strip()
 
-        fenced = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
-        candidates = []
-        if fenced:
-            candidates.append(fenced.group(1))
+        # 0) まず全文をJSONとして読めるか（最優先）
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
 
-        candidates += re.findall(r"\{.*?\}", text, re.DOTALL)
-        for c in candidates:
+        # 1) fenced JSON を抽出
+        fenced = re.search(r"```json\s*(\[.*\])\s*```", text, re.DOTALL)
+        if fenced:
             try:
-                obj = json.loads(c)
+                obj = json.loads(fenced.group(1))
                 if isinstance(obj, dict):
                     return obj
             except Exception:
-                continue
+                pass
+
+        # 2) 最後の保険（最初に見つかった { } を試す）
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if m:
+            try:
+                obj = json.loads(m.group(0))
+                if isinstance(obj, dict):
+                    return obj
+            except Exception:
+                pass
+
         return {}
 
     def _parse_response(self, response_text: str, expected_count: int = 5) -> List[Dict]:

@@ -11,36 +11,126 @@ Claude APIを使用して、2026年最新Threadsアルゴリズムに最適化�
 """
 
 from __future__ import annotations
-
+ 
 import logging
 import anthropic
 from typing import List, Dict
 from config import PersonaConfig, ThreadsAlgorithmRules, PostTemplate, SCORING_WEIGHTS
 
+
 class ThreadsPostGenerator:
-    """Threads投稿生成エンジン"""
+    # （既存の __init__ や他メソッドは残す想定）
 
-    def __init__(self, api_key: str):
-        self.client = anthropic.Anthropic(api_key=api_key)
-        self.rules = ThreadsAlgorithmRules()
+    def generate_posts(
+        self,
+        persona: PersonaConfig,
+        news_content: str,
+        num_variations: int = 5,
+    ) -> List[Dict]:
+        """Generate Threads posts. Always returns exactly num_variations items."""
+        num_variations = int(num_variations or 5)
+        if num_variations <= 0:
+            num_variations = 5
 
-        # ===== 高品質用 =====
-        self.enable_two_pass_humanize = True
-        self.draft_temperature = 0.7
-        self.humanize_temperature = 0.4
+        # --- Draft ---
+        prompt = self._build_prompt_draft(persona, news_content, num_variations)
 
-        # app.py から渡される UIトグル
-        self.ui_mode_calm_priority = False
+        try:
+            response = self.client.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=4000,
+                temperature=self.draft_temperature,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except Exception:
+            logging.exception("ERROR draft messages.create failed")
+            posts = self._fallback_parse("", expected_count=num_variations)
+            posts = self._apply_forced_topic_tag(posts)
+            posts = [self._ensure_lens(p) for p in posts]
+            return [self._score_post(p, persona) for p in posts][:num_variations]
 
-        # app.py から渡される テーマタグ（A＝全投稿で統一）
-        self.forced_topic_tag = None  # 例: "#Web集客"
+        # Claude応答は複数ブロックになり得るため text ブロックのみ結合
+        draft_text = "".join(
+            b.text
+            for b in (getattr(response, "content", []) or [])
+            if getattr(b, "type", "") == "text" and getattr(b, "text", None)
+        )
 
-        # AIっぽさを感じやすい定型句（必要なら拡張）
-        self.ai_like_phrases = [
-            "結論から言うと", "本質的には", "重要なのは", "要するに", "つまり",
-            "〜かもしれません", "徹底的に", "最適化", "網羅的", "体系的に",
-            "ご紹介します", "解説します", "メリット・デメリット",
-        ]
+        logging.warning("DEBUG draft_text len: %s", len(draft_text))
+        logging.warning("DEBUG draft_text head: %s", draft_text[:400])
+
+        posts = self._parse_response(draft_text, expected_count=num_variations)
+        if not isinstance(posts, list):
+            posts = []
+
+        # dict のみ残す（文字列/リスト混入を除去）
+        posts = [p for p in posts if isinstance(p, dict)]
+
+        # lens / tag を最低限整える
+        posts = [self._ensure_lens(p) for p in posts]
+        posts = self._apply_forced_topic_tag(posts)
+
+        # --- 2-pass humanize (optional) ---
+        if getattr(self, "enable_two_pass_humanize", True):
+            style_modes = self._pick_style_modes(num_variations)
+            humanized: List[Dict] = []
+
+            for i in range(min(len(posts), num_variations)):
+                try:
+                    humanized.append(self._humanize_post(posts[i], persona, style_modes[i]))
+                except Exception:
+                    logging.exception("ERROR humanize failed at index=%s", i)
+                    p = dict(posts[i])
+                    p["style_mode"] = style_modes[i]
+                    humanized.append(self._ensure_lens(p))
+
+            posts = humanized
+
+        # --- Score & sort ---
+        scored_posts = [self._score_post(p, persona) for p in posts]
+        scored_posts.sort(
+            key=lambda x: float(x.get("score", 0.0) or 0.0),
+            reverse=True,
+        )
+
+        # --- Fill to exactly num_variations ---
+        missing = num_variations - len(scored_posts)
+        if missing > 0:
+            fillers = self._fallback_parse("", expected_count=missing)
+            fillers = self._apply_forced_topic_tag(fillers)
+            fillers = [self._ensure_lens(f) for f in fillers]
+            fillers = [self._score_post(f, persona) for f in fillers]
+            scored_posts.extend(fillers)
+
+        # --- Final guarantee: post_text must be non-empty ---
+        fixed: List[Dict] = []
+        for p in scored_posts[:num_variations]:
+            if not isinstance(p, dict):
+                p = {}
+
+            if not (p.get("post_text") or "").strip():
+                fb = self._fallback_parse("", expected_count=1)[0]
+                # inherit tag/lens/style_mode if available
+                fb["topic_tag"] = (p.get("topic_tag") or fb.get("topic_tag"))
+                fb["lens"] = (p.get("lens") or fb.get("lens") or "N/A")
+                fb["style_mode"] = (p.get("style_mode") or fb.get("style_mode") or "draft")
+                p = fb
+
+            fixed.append(self._ensure_lens(p))
+
+        logging.warning("DEBUG posts_final_count: %s", len(fixed))
+        return fixed
+
+    def _pick_style_modes(self, n: int) -> List[str]:
+        """UI toggle rule: Calm優先なら 4 Calm + 1 Warm, それ以外は 3 Warm + 2 Calm."""
+        n = int(n or 5)
+        if getattr(self, "ui_mode_calm_priority", False):
+            base = ["calm"] * max(0, n - 1) + ["warm"]
+        else:
+            warm = min(3, n)
+            calm = max(0, n - warm)
+            base = ["warm"] * warm + ["calm"] * calm
+        return (base + ["calm"] * n)[:n]
 
     # =========================
     # PUBLIC

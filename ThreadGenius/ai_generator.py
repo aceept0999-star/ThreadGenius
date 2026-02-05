@@ -198,6 +198,7 @@ INPUT (draft_post.post_text):
         posts = [p for p in posts if isinstance(p, dict)]
         posts = [self._ensure_lens(p) for p in posts]
         posts = self._apply_forced_topic_tag(posts)
+        posts = [self._enforce_no_ascii_on_post(p) for p in posts]
 
         if getattr(self, "enable_two_pass_humanize", True):
             style_modes = self._pick_style_modes(num_variations)
@@ -275,6 +276,7 @@ INPUT (draft_post.post_text):
                 )
 
             rewritten = self._ensure_lens(rewritten)
+            rewritten = self._enforce_no_ascii_on_post(rewritten)
 
             if not (rewritten.get("post_text") or "").strip():
                 post["style_mode"] = style_mode
@@ -380,6 +382,36 @@ INPUT (draft_post.post_text):
     # =========================
     # UTIL（最低限：起動を通す）
     # =========================
+    
+    def _sanitize_no_ascii_letters(self, s: str) -> str:
+        import re
+        s = (s or "")
+
+        mapping = {
+            "WEB": "ウェブ",
+            "LP": "ランディングページ",
+            "KPI": "重要指標",
+            "SNS": "ソーシャルメディア",
+            "CTA": "行動喚起",
+            "URL": "リンク",
+            "MEO": "地図検索対策",
+            "GBP": "ビジネスプロフィール",
+            "GOOGLE": "グーグル",
+        }
+        for en, jp in mapping.items():
+            s = re.sub(rf"\b{en}\b", jp, s, flags=re.I)
+
+        s = re.sub(r"[A-Za-z]+", "", s)
+        s = re.sub(r"\s{2,}", " ", s).strip()
+        return s
+
+    def _enforce_no_ascii_on_post(self, post: Dict) -> Dict:
+        if not isinstance(post, dict):
+            return {}
+        post["post_text"] = self._sanitize_no_ascii_letters(post.get("post_text", ""))
+        post["reasoning"] = self._sanitize_no_ascii_letters(post.get("reasoning", ""))
+        return post
+
     def _apply_forced_topic_tag(self, posts: List[Dict]) -> List[Dict]:
         tag = (self.forced_topic_tag or "").strip()
         if not tag:
